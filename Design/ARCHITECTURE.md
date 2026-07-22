@@ -53,7 +53,7 @@ No attachment payload is copied into the index. Derived document text is opt-in 
 
 ### Presentation
 
-The primary interface is a native three-column `NavigationSplitView`. Folder and search pages retain their requested order after parallel decoding, and the next 100-message page is requested 20 rows before the visible boundary:
+The primary interface is a native three-column `NavigationSplitView`. Indexed folder and search rows load without message-body decoding, retain their requested order, and hydrate their full message only when selected. Unindexed fallback pages retain their requested order after parallel decoding. The next page is requested before the visible boundary:
 
 1. Accounts and folders
 2. Filterable message results
@@ -75,7 +75,7 @@ Previewing creates a UUID-isolated temporary file and invokes Quick Look. Drag-t
 
 ### Search query path
 
-The index schema stores folder ID, sent timestamp, attachment presence, and read state as unindexed FTS columns beside separate searchable sender, To, CC, and BCC fields. Schema version 5 discards only an older derived FTS table, resets its checkpoint, and resumes in 250-message transactions. Outlook numeric booleans, including scientific `0E0`/`1E0` encodings, are normalized during parsing. Once complete, grouped `is_read` counts become the authoritative folder unread totals and folder pages use a global `sent_at DESC, entry_path ASC` order. Before completion, archive-order paging remains available and unread badges stay hidden rather than displaying provisional totals. Structured `from:`, `to:`, `cc:`, `bcc:`, `folder:`, date, and attachment filter values are bound SQLite parameters; free terms alone become an escaped FTS expression. Results are counted and returned in 100-message pages with relevance or date ordering.
+Schema 6 keeps full-text content in FTS5 and mirrors only entry path, folder, sent timestamp, subject, sender label, preview, attachment presence, and read state into a compact `message_list` table. B-tree indexes cover folder/date paging, global date order, and attachment/date filtering. Existing schema-5 caches migrate into this table once using local derived FTS data, without reparsing or modifying the OLM. New indexes populate both stores in the same 250-message transaction, so their checkpoint and completeness cannot diverge. Outlook numeric booleans, including scientific `0E0`/`1E0` encodings, are normalized during parsing. Once complete, grouped `is_read` counts become the authoritative folder unread totals and folder pages use a global `sent_at DESC, entry_path ASC` order. These pages return lightweight list records directly from SQLite; selecting a record uses its private entry path to hydrate exactly one complete message from the read-only archive. The entry path is not included in message or diagnostic exports. Before completion, 25-message archive-order fallback paging remains available and unread badges stay hidden rather than displaying provisional totals. Structured filters that need only folder/date/attachment metadata use `message_list`; free text and participant filters use FTS5 and resolve their result paths through the lightweight table. Indexed results are counted and returned in 100-message pages with relevance or date ordering.
 
 ### Operations and export
 

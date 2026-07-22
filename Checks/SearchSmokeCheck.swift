@@ -55,6 +55,12 @@ enum SearchSmokeCheck {
         guard results.paths == ["message_1.xml"], results.totalCount == 1 else {
             throw CheckFailure("FTS5 did not return the indexed message")
         }
+        guard let lightweight = results.records.first?.messageSummary(),
+              !lightweight.isFullyLoaded,
+              lightweight.sourceEntryPath == "message_1.xml",
+              lightweight.subject == message.subject else {
+            throw CheckFailure("Indexed result did not produce a lightweight message row")
+        }
         let copied = try index.searchPaths(
             matching: "cc:cc@example.invalid bcc:bcc@example.invalid",
             folderID: nil, offset: 0, limit: 10, sort: .relevance

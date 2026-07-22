@@ -69,7 +69,8 @@ final class OLMMessageParser: NSObject, XMLParserDelegate {
             htmlBody: htmlBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : htmlBody,
             isRead: isRead,
             isFlagged: isFlagged,
-            attachments: attachments
+            attachments: attachments,
+            sourceEntryPath: entryPath
         )
         return parsedCompletely ? .parsed(message) : .recovered(message)
     }

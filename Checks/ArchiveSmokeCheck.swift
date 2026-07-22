@@ -63,12 +63,19 @@ private final class NativeOLMArchiveReaderCheck {
         guard first.nextOffset == 100, second.nextOffset == 200, ids.count == 200 else {
             throw CheckFailure("Paging returned duplicate or incorrect offsets")
         }
-        print("HTML messages in paging sample: \(combined.filter { $0.htmlBody != nil }.count)")
-        print("Messages with CC in paging sample: \(combined.filter { !$0.ccRecipients.isEmpty }.count)")
-        print("Messages with BCC in paging sample: \(combined.filter { !$0.bccRecipients.isEmpty }.count)")
+        guard combined.allSatisfy({ !$0.isFullyLoaded }) else {
+            throw CheckFailure("Completed-index page unexpectedly loaded full XML")
+        }
+        let hydrated = try combined.prefix(10).map { try reader.loadMessageDetails(for: $0) }
+        guard hydrated.allSatisfy(\.isFullyLoaded) else {
+            throw CheckFailure("Selected message details did not hydrate")
+        }
+        print("HTML messages in 10-message hydration sample: \(hydrated.filter { $0.htmlBody != nil }.count)")
+        print("Messages with CC in hydration sample: \(hydrated.filter { !$0.ccRecipients.isEmpty }.count)")
+        print("Messages with BCC in hydration sample: \(hydrated.filter { !$0.bccRecipients.isEmpty }.count)")
         print("Unread messages in paging sample: \(combined.filter { !$0.isRead }.count)")
-        print("Flagged messages in paging sample: \(combined.filter(\.isFlagged).count)")
-        let attachments = combined.flatMap(\.attachments)
+        print("Flagged messages in hydration sample: \(hydrated.filter(\.isFlagged).count)")
+        let attachments = hydrated.flatMap(\.attachments)
         let available = attachments.filter(\.isAvailable)
         let missing = attachments.filter { $0.diagnostic == .missingPayload }.count
         let malformed = attachments.filter { $0.diagnostic == .malformedReference }.count

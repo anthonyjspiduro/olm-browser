@@ -69,6 +69,7 @@ private struct SyntheticReader: OLMArchiveReading {
     func loadMessages(in folderID: String, offset: Int, limit: Int) throws -> MessagePage { MessagePage(messages: [], nextOffset: 0, totalCount: 0) }
     func buildSearchIndex(progress: @escaping @Sendable (IndexProgress) -> Void) throws {}
     func searchMessages(matching query: String, folderID: String?, offset: Int, limit: Int, sort: SearchSort) throws -> MessagePage { MessagePage(messages: [], nextOffset: 0, totalCount: 0) }
+    func loadMessageDetails(for message: MessageSummary) throws -> MessageSummary { message }
     func attachmentData(for attachment: AttachmentSummary) throws -> Data { Data("hello".utf8) }
     func operationalStatus() -> ArchiveOperationalStatus { ArchiveOperationalStatus(archiveEntries: 0, messageEntries: 0, attachmentEntries: 0, duplicateEntryPaths: 0, failedMessageEntries: 0, recoveredMalformedMessageEntries: 0, checksumFailureEntries: 0, unsupportedCompressionEntries: 0, cacheByteCount: 0) }
     func folderUnreadCounts() -> [String: Int]? { [:] }

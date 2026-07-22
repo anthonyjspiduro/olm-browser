@@ -25,6 +25,14 @@ enum PagingPerformanceCheck {
         let distantStart = ContinuousClock.now
         let distant = try reader.loadMessages(in: folder.id, offset: distantOffset, limit: 100)
         let distantDuration = distantStart.duration(to: .now)
+        guard first.messages.allSatisfy({ !$0.isFullyLoaded }),
+              second.messages.allSatisfy({ !$0.isFullyLoaded }),
+              distant.messages.allSatisfy({ !$0.isFullyLoaded }) else {
+            throw Failure("Completed-index pages decoded full message XML")
+        }
+        let detailStart = ContinuousClock.now
+        let detailed = try reader.loadMessageDetails(for: first.messages[0])
+        let detailDuration = detailStart.duration(to: .now)
 
         guard first.messages.count == 100, second.messages.count == 100 else {
             throw Failure("Expected two full 100-message pages")
@@ -33,6 +41,8 @@ enum PagingPerformanceCheck {
         print("First 100-message page: \(firstDuration)")
         print("Second 100-message page: \(secondDuration)")
         print("Distant 100-message page: \(distantDuration)")
+        print("Selected-message hydration: \(detailDuration)")
+        print("Selected message fully loaded: \(detailed.isFullyLoaded)")
         print("Paging performance sample passed with \(first.messages.count + second.messages.count + distant.messages.count) messages")
     }
 }

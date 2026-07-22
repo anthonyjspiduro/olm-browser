@@ -16,54 +16,59 @@ struct MessageDetailView: View {
                     Divider()
                         .padding(.vertical, 18)
 
-                    if message.htmlBody != nil {
-                        HStack(spacing: 10) {
-                            Picker("Message body", selection: $bodyMode) {
-                                Text("HTML").tag(BodyMode.html)
-                                Text("Plain Text").tag(BodyMode.plainText)
+                    if !message.isFullyLoaded {
+                        ProgressView("Loading message…")
+                            .frame(maxWidth: .infinity, minHeight: 240)
+                    } else {
+                        if message.htmlBody != nil {
+                            HStack(spacing: 10) {
+                                Picker("Message body", selection: $bodyMode) {
+                                    Text("HTML").tag(BodyMode.html)
+                                    Text("Plain Text").tag(BodyMode.plainText)
+                                }
+                                .pickerStyle(.segmented)
+                                .labelsHidden()
+                                .frame(width: 190)
+                                Spacer()
+                                if bodyMode == .html, let html = message.htmlBody {
+                                    RemoteImageControls(
+                                        policy: RemoteImagePolicy.inspect(html),
+                                        isApproved: remoteImageApproval.isApproved(for: remoteIdentity(message)),
+                                        load: {
+                                            pendingRemoteImageApproval = remoteIdentity(message)
+                                            showingRemoteImageWarning = true
+                                        },
+                                        block: { remoteImageApproval.block() }
+                                    )
+                                }
                             }
-                            .pickerStyle(.segmented)
-                            .labelsHidden()
-                            .frame(width: 190)
-                            Spacer()
-                            if bodyMode == .html, let html = message.htmlBody {
-                                RemoteImageControls(
-                                    policy: RemoteImagePolicy.inspect(html),
-                                    isApproved: remoteImageApproval.isApproved(for: remoteIdentity(message)),
-                                    load: {
-                                        pendingRemoteImageApproval = remoteIdentity(message)
-                                        showingRemoteImageWarning = true
-                                    },
-                                    block: { remoteImageApproval.block() }
-                                )
-                            }
+                            .padding(.bottom, 12)
                         }
-                        .padding(.bottom, 12)
-                    }
 
-                    if bodyMode == .html, let html = message.htmlBody {
-                        let policy = RemoteImagePolicy.inspect(html)
-                        HTMLMessageView(
-                            html: html,
-                            inlineImages: store.inlineImages,
-                            allowedRemoteImageOrigins: remoteImageApproval.isApproved(for: remoteIdentity(message))
-                                ? policy.httpsOrigins
-                                : [],
-                            onExternalLinkRequested: store.requestOpenExternalLink
-                        )
+                        if bodyMode == .html, let html = message.htmlBody {
+                            let policy = RemoteImagePolicy.inspect(html)
+                            HTMLMessageView(
+                                html: html,
+                                inlineImages: store.inlineImages,
+                                allowedRemoteImageOrigins: remoteImageApproval.isApproved(for: remoteIdentity(message))
+                                    ? policy.httpsOrigins
+                                    : [],
+                                onExternalLinkRequested: store.requestOpenExternalLink
+                            )
                             .id(remoteIdentity(message))
                             .frame(minHeight: 480)
-                    } else {
-                        Text(message.body)
-                            .font(.body)
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
+                        } else {
+                            Text(message.body)
+                                .font(.body)
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
 
-                    if !message.attachments.isEmpty {
-                        Divider()
-                            .padding(.vertical, 18)
-                        AttachmentStrip(message: message)
+                        if !message.attachments.isEmpty {
+                            Divider()
+                                .padding(.vertical, 18)
+                            AttachmentStrip(message: message)
+                        }
                     }
                 }
                 .padding(24)
@@ -163,6 +168,7 @@ private struct MessageHeader: View {
                         Button(format.label) { store.exportMessage(message, format: format) }
                     }
                 }
+                .disabled(!message.isFullyLoaded)
                 if message.isFlagged {
                     Image(systemName: "flag.fill")
                         .foregroundStyle(.orange)

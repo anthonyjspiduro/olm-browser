@@ -130,6 +130,48 @@ struct MessageSummary: Identifiable, Hashable, Sendable {
     let isRead: Bool
     let isFlagged: Bool
     let attachments: [AttachmentSummary]
+    let sourceEntryPath: String?
+    let isFullyLoaded: Bool
+
+    init(
+        id: String,
+        folderID: String,
+        subject: String,
+        sender: MailParticipant,
+        recipients: [MailParticipant],
+        ccRecipients: [MailParticipant],
+        bccRecipients: [MailParticipant],
+        messageID: String?,
+        sentAt: Date,
+        receivedAt: Date?,
+        preview: String,
+        body: String,
+        htmlBody: String?,
+        isRead: Bool,
+        isFlagged: Bool,
+        attachments: [AttachmentSummary],
+        sourceEntryPath: String? = nil,
+        isFullyLoaded: Bool = true
+    ) {
+        self.id = id
+        self.folderID = folderID
+        self.subject = subject
+        self.sender = sender
+        self.recipients = recipients
+        self.ccRecipients = ccRecipients
+        self.bccRecipients = bccRecipients
+        self.messageID = messageID
+        self.sentAt = sentAt
+        self.receivedAt = receivedAt
+        self.preview = preview
+        self.body = body
+        self.htmlBody = htmlBody
+        self.isRead = isRead
+        self.isFlagged = isFlagged
+        self.attachments = attachments
+        self.sourceEntryPath = sourceEntryPath
+        self.isFullyLoaded = isFullyLoaded
+    }
 }
 
 struct ArchiveSnapshot: Sendable {

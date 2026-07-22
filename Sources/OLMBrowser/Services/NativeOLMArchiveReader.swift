@@ -78,25 +78,24 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
 
     func loadMessages(in folderID: MailFolder.ID, offset: Int, limit: Int) throws -> MessagePage {
         let state = stateLock.withLock {
-            (archive, catalog.messageEntriesByFolder[folderID] ?? [], searchIndex, entriesByPath)
+            (archive, catalog.messageEntriesByFolder[folderID] ?? [], searchIndex)
         }
         guard let archive = state.0 else { throw ArchiveReaderError.unreadableArchive }
         beginInteractiveRead()
         defer { endInteractiveRead() }
-        if let indexedPage = try state.2?.folderPagePaths(
+        if let indexedPage = try state.2?.folderPageRecords(
             folderID: folderID, offset: offset, limit: limit
         ) {
-            let entries = indexedPage.paths.compactMap { state.3[$0] }
-            let messages = parseConcurrently(entries: entries, folderID: folderID, archive: archive)
             return MessagePage(
-                messages: messages,
+                messages: indexedPage.records.map { $0.messageSummary() },
                 nextOffset: indexedPage.nextOffset,
                 totalCount: indexedPage.totalCount
             )
         }
         let orderedEntries = Array(state.1.reversed())
         let start = min(max(0, offset), orderedEntries.count)
-        let end = min(start + max(1, limit), orderedEntries.count)
+        let fallbackLimit = min(max(1, limit), Self.unindexedInteractivePageSize)
+        let end = min(start + fallbackLimit, orderedEntries.count)
         var messages = parseConcurrently(
             entries: Array(orderedEntries[start..<end]), folderID: folderID, archive: archive
         )
@@ -165,21 +164,55 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
         limit: Int,
         sort: SearchSort
     ) throws -> MessagePage {
-        let state = stateLock.withLock { (archive, searchIndex, entriesByPath, folderByEntryPath) }
-        guard let archive = state.0, let index = state.1 else {
+        let state = stateLock.withLock { (archive, searchIndex) }
+        guard state.0 != nil, let index = state.1 else {
             return MessagePage(messages: [], nextOffset: 0, totalCount: 0)
         }
         beginInteractiveRead()
         defer { endInteractiveRead() }
-        let page = try index.searchPaths(
+        let page = try index.searchRecords(
             matching: query, folderID: folderID, offset: offset, limit: limit, sort: sort
         )
-        let work = page.paths.compactMap { path -> (ZIPEntry, MailFolder.ID)? in
-            guard let entry = state.2[path], let folderID = state.3[path] else { return nil }
-            return (entry, folderID)
-        }
-        let messages = parseConcurrently(work: work, archive: archive)
+        let messages = page.records.map { $0.messageSummary() }
         return MessagePage(messages: messages, nextOffset: page.nextOffset, totalCount: page.totalCount)
+    }
+
+    func loadMessageDetails(for message: MessageSummary) throws -> MessageSummary {
+        guard !message.isFullyLoaded else { return message }
+        guard let path = message.sourceEntryPath else { return message }
+        let state = stateLock.withLock {
+            (archive, entriesByPath[path], folderByEntryPath[path])
+        }
+        guard let archive = state.0, let entry = state.1, let folderID = state.2 else {
+            throw ArchiveReaderError.unreadableArchive
+        }
+        beginInteractiveRead()
+        defer { endInteractiveRead() }
+        guard let parsed = parse(
+            entry: entry, folderID: folderID, archive: archive, parser: OLMMessageParser()
+        ) else {
+            throw ArchiveReaderError.unreadableArchive
+        }
+        return MessageSummary(
+            id: message.id,
+            folderID: parsed.folderID,
+            subject: parsed.subject,
+            sender: parsed.sender,
+            recipients: parsed.recipients,
+            ccRecipients: parsed.ccRecipients,
+            bccRecipients: parsed.bccRecipients,
+            messageID: parsed.messageID,
+            sentAt: parsed.sentAt,
+            receivedAt: parsed.receivedAt,
+            preview: parsed.preview,
+            body: parsed.body,
+            htmlBody: parsed.htmlBody,
+            isRead: parsed.isRead,
+            isFlagged: parsed.isFlagged,
+            attachments: parsed.attachments,
+            sourceEntryPath: path,
+            isFullyLoaded: true
+        )
     }
 
     func attachmentData(for attachment: AttachmentSummary) throws -> Data {
@@ -396,13 +429,16 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
             ccRecipients: message.ccRecipients, bccRecipients: message.bccRecipients,
             messageID: message.messageID, sentAt: message.sentAt, receivedAt: message.receivedAt,
             preview: message.preview, body: message.body, htmlBody: message.htmlBody,
-            isRead: message.isRead, isFlagged: message.isFlagged, attachments: resolved
+            isRead: message.isRead, isFlagged: message.isFlagged, attachments: resolved,
+            sourceEntryPath: message.sourceEntryPath,
+            isFullyLoaded: message.isFullyLoaded
         )
     }
 
     static let maximumAttachmentSize: UInt64 = 256 * 1_024 * 1_024
     static let maximumConcurrentMessageReads = 8
     static let indexDecodeChunkSize = 32
+    static let unindexedInteractivePageSize = 25
 
     private func buildCatalog(entries: [ZIPEntry]) -> Catalog {
         var catalog = Catalog()

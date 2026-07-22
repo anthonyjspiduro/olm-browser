@@ -27,6 +27,8 @@ The reader has been validated against a 26 GB OLM containing 83,172 messages acr
 - Expandable nested folder hierarchy
 - Folder message counts and accurate unread totals after indexing
 - Incremental 100-message paging with globally chronological order from the completed index
+- Lightweight indexed list rows; full XML, body, and attachment parsing only for the selected message
+- 25-message bounded fallback pages while an index has not completed
 - Bounded eight-worker message decoding and 20-row look-ahead page prefetching
 - Sender, To, CC, BCC, subject, sent/received dates, folder, message ID, attachment count, read state, and flag display
 - Attachment filename, content type, and size display
@@ -51,6 +53,7 @@ The reader has been validated against a 26 GB OLM containing 83,172 messages acr
   - Responsive images and dark-mode support
   - An explicit HTML/Plain Text toggle
 - Persistent SQLite/FTS5 search across subjects, participants, previews, bodies, and attachment names
+- B-tree-indexed lightweight message-list cache for millisecond folder paging
 - Search available while background indexing continues
 - Resumable 250-entry index transactions
 - Parallel index decoding in 32-message chunks with serialized SQLite commits
@@ -105,7 +108,9 @@ swiftc Sources/OLMBrowser/Models/ArchiveModels.swift \
 
 Full-text indexing begins after the archive folder catalog opens. Messages remain browsable while indexing runs. The index commits every 250 entries and records its next position in the same transaction, allowing interrupted indexing to resume safely.
 
-Message XML decoding, CRC verification, and attachment-reference resolution use a bounded eight-worker pipeline. Indexing feeds that pipeline in 32-message chunks and writes completed results through the single serialized SQLite connection. Interactive folder pages and searches take priority between index chunks. Folder scrolling requests the next 100-message page when the user is within 20 rows of the current boundary so loading normally finishes before the boundary is reached.
+Message XML decoding, CRC verification, and attachment-reference resolution use a bounded eight-worker pipeline. Indexing feeds that pipeline in 32-message chunks and writes completed results through the single serialized SQLite connection. Interactive folder pages and searches take priority between index chunks. Once the index is complete, folder and search pages are constructed directly from lightweight FTS metadata without reopening or parsing 100 full message XML entries. Only the selected message is hydrated with its complete headers, body, HTML, and attachment references. Before index completion, archive-backed browsing uses smaller 25-message chunks to minimize time to first content. Folder scrolling requests the next page before the visible boundary.
+
+Search schema 6 adds a compact `message_list` table indexed by folder, date, and attachment presence. Existing schema-5 caches migrate locally once without reparsing or modifying the OLM; that first launch after upgrading can take additional time, while subsequent launches use the indexed table directly.
 
 Search results may be incomplete until the progress indicator finishes. Queries accept free text plus `from:`, `to:`, `cc:`, `bcc:`, `folder:`, `after:YYYY-MM-DD`, `before:YYYY-MM-DD`, and `has:attachment`. Quote filter values containing spaces. Derived search data can be rebuilt or deleted and compacted without affecting the source OLM.
 

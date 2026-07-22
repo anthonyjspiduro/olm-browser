@@ -72,6 +72,9 @@ struct MessageListView: View {
                 }
             }
         }
+        .onChange(of: store.selectedMessageID) {
+            store.selectedMessageChanged()
+        }
     }
 
     private var resultLabel: String {

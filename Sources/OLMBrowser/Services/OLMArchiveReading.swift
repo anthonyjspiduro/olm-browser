@@ -40,6 +40,7 @@ protocol OLMArchiveReading: Sendable {
         limit: Int,
         sort: SearchSort
     ) throws -> MessagePage
+    func loadMessageDetails(for message: MessageSummary) throws -> MessageSummary
     func attachmentData(for attachment: AttachmentSummary) throws -> Data
     func operationalStatus() -> ArchiveOperationalStatus
     func folderUnreadCounts() -> [MailFolder.ID: Int]?

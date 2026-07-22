@@ -160,6 +160,8 @@ struct PreviewArchiveReader: OLMArchiveReading {
         MessagePage(messages: [], nextOffset: 0, totalCount: 0)
     }
 
+    func loadMessageDetails(for message: MessageSummary) throws -> MessageSummary { message }
+
     func attachmentData(for attachment: AttachmentSummary) throws -> Data {
         throw ArchiveReaderError.unreadableArchive
     }

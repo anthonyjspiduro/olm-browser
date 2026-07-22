@@ -21,6 +21,7 @@ final class ArchiveStore: ObservableObject {
     @Published private(set) var inlineImages: [String: String] = [:]
     @Published private(set) var operationalStatus: ArchiveOperationalStatus?
     @Published private(set) var unreadCountsAreAccurate = false
+    @Published private(set) var isLoadingMessageDetail = false
 
     private let reader: any OLMArchiveReading
     private let pageSize = 100
@@ -32,6 +33,7 @@ final class ArchiveStore: ObservableObject {
     private var indexTask: Task<Void, Never>?
     private var openTask: Task<Void, Never>?
     private var inlineImageTask: Task<Void, Never>?
+    private var messageDetailTask: Task<Void, Never>?
     private let attachmentFiles = AttachmentFileStore()
 
     init(reader: any OLMArchiveReading = NativeOLMArchiveReader()) {
@@ -140,7 +142,10 @@ final class ArchiveStore: ObservableObject {
                 messages.append(contentsOf: page.messages)
                 nextPageOffset = page.nextOffset
                 totalMessagesInFolder = page.totalCount
-                if selectedMessageID == nil { selectedMessageID = messages.first?.id }
+                if selectedMessageID == nil {
+                    selectedMessageID = messages.first?.id
+                    selectedMessageChanged()
+                }
             } catch {
                 errorMessage = error.localizedDescription
             }
@@ -150,9 +155,10 @@ final class ArchiveStore: ObservableObject {
 
     func messageDidAppear(_ messageID: MessageSummary.ID) {
         let visible = visibleMessages
+        let prefetchDistance = min(20, max(5, visible.count / 10))
         guard hasMoreMessages,
               let index = visible.firstIndex(where: { $0.id == messageID }),
-              index >= max(0, visible.count - 20) else { return }
+              index >= max(0, visible.count - prefetchDistance) else { return }
         loadNextPage()
     }
 
@@ -209,7 +215,10 @@ final class ArchiveStore: ObservableObject {
             else { searchResults.append(contentsOf: page.messages) }
             nextSearchOffset = page.nextOffset
             totalSearchResults = page.totalCount
-            if offset == 0 { selectedMessageID = page.messages.first?.id }
+            if offset == 0 {
+                selectedMessageID = page.messages.first?.id
+                selectedMessageChanged()
+            }
         } catch {
             if !Task.isCancelled { errorMessage = error.localizedDescription }
         }
@@ -219,10 +228,44 @@ final class ArchiveStore: ObservableObject {
 
     var searchResultTotal: Int { totalSearchResults }
 
+    func selectedMessageChanged() {
+        messageDetailTask?.cancel()
+        inlineImageTask?.cancel()
+        inlineImages = [:]
+        guard let message = selectedMessage else {
+            isLoadingMessageDetail = false
+            return
+        }
+        guard !message.isFullyLoaded else {
+            isLoadingMessageDetail = false
+            loadInlineImages(for: message)
+            return
+        }
+        isLoadingMessageDetail = true
+        let selectedID = message.id
+        let reader = reader
+        messageDetailTask = Task {
+            do {
+                let detailed = try await Task.detached(priority: .userInitiated) {
+                    try reader.loadMessageDetails(for: message)
+                }.value
+                guard !Task.isCancelled, selectedMessageID == selectedID else { return }
+                replaceMessage(detailed)
+                isLoadingMessageDetail = false
+                loadInlineImages(for: detailed)
+            } catch {
+                guard !Task.isCancelled, selectedMessageID == selectedID else { return }
+                isLoadingMessageDetail = false
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
     func closeArchive() {
         searchTask?.cancel()
         indexTask?.cancel()
         inlineImageTask?.cancel()
+        messageDetailTask?.cancel()
         snapshot = nil
         unreadCountsAreAccurate = false
         archiveSessionID = UUID()
@@ -240,6 +283,7 @@ final class ArchiveStore: ObservableObject {
         searchTask?.cancel()
         indexTask?.cancel()
         inlineImageTask?.cancel()
+        messageDetailTask?.cancel()
         attachmentFiles.cleanupSession()
     }
 
@@ -442,7 +486,8 @@ final class ArchiveStore: ObservableObject {
             Task {
                 do {
                     try await Task.detached(priority: .userInitiated) {
-                        let data = try MessageBatchExporter.csvData(for: selectedMessages)
+                        let hydrated = try selectedMessages.map { try reader.loadMessageDetails(for: $0) }
+                        let data = try MessageBatchExporter.csvData(for: hydrated)
                         try data.write(to: destination, options: [.atomic])
                     }.value
                 } catch { errorMessage = error.localizedDescription }
@@ -460,8 +505,9 @@ final class ArchiveStore: ObservableObject {
         Task {
             do {
                 _ = try await Task.detached(priority: .userInitiated) {
-                    try MessageBatchExporter.exportFiles(
-                        selectedMessages,
+                    let hydrated = try selectedMessages.map { try reader.loadMessageDetails(for: $0) }
+                    return try MessageBatchExporter.exportFiles(
+                        hydrated,
                         format: format,
                         to: destination,
                         reader: reader
@@ -501,11 +547,24 @@ final class ArchiveStore: ObservableObject {
     }
 
     private func resetPageState() {
+        messageDetailTask?.cancel()
+        inlineImageTask?.cancel()
+        isLoadingMessageDetail = false
+        inlineImages = [:]
         messages = []
         selectedMessageID = nil
         nextPageOffset = 0
         totalMessagesInFolder = selectedFolder?.messageCount ?? 0
         isLoadingPage = false
+    }
+
+    private func replaceMessage(_ detailed: MessageSummary) {
+        if let index = messages.firstIndex(where: { $0.id == detailed.id }) {
+            messages[index] = detailed
+        }
+        if let index = searchResults.firstIndex(where: { $0.id == detailed.id }) {
+            searchResults[index] = detailed
+        }
     }
 
     private func startIndexing() {

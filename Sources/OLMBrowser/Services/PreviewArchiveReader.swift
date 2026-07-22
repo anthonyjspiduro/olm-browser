@@ -68,6 +68,7 @@ struct PreviewArchiveReader: OLMArchiveReading {
                 sentAt: Date().addingTimeInterval(-3_600),
                 preview: "Here is the revised timeline we discussed, including the remaining review milestones…",
                 body: "Hi,\n\nHere is the revised timeline we discussed, including the remaining review milestones. Please review the attached schedule before Thursday.\n\nThanks,\nJordan",
+                htmlBody: "<p>Hi,</p><p>Here is the <strong>revised timeline</strong> we discussed. Please review the attached schedule before Thursday.</p><p>Thanks,<br>Jordan</p>",
                 isRead: false,
                 isFlagged: true,
                 attachments: [
@@ -88,6 +89,7 @@ struct PreviewArchiveReader: OLMArchiveReading {
                 sentAt: Date().addingTimeInterval(-86_400),
                 preview: "Approved. Please keep the final amount within the range noted below…",
                 body: "Approved. Please keep the final amount within the range noted below and send the completed estimate to the team.",
+                htmlBody: nil,
                 isRead: true,
                 isFlagged: false,
                 attachments: []
@@ -101,6 +103,7 @@ struct PreviewArchiveReader: OLMArchiveReading {
                 sentAt: Date().addingTimeInterval(-172_800),
                 preview: "The review is complete and the deliverables are ready for the next stage…",
                 body: "The review is complete and the deliverables are ready for the next stage. I included a concise status recap below.",
+                htmlBody: nil,
                 isRead: true,
                 isFlagged: false,
                 attachments: []
@@ -114,6 +117,7 @@ struct PreviewArchiveReader: OLMArchiveReading {
                 sentAt: Date().addingTimeInterval(-259_200),
                 preview: "The client consolidated their feedback into three requested changes…",
                 body: "The client consolidated their feedback into three requested changes. The notes here are representative design data only.",
+                htmlBody: nil,
                 isRead: false,
                 isFlagged: false,
                 attachments: []

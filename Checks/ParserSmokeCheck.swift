@@ -13,6 +13,7 @@ enum ParserSmokeCheck {
           </OPFMessageCopyToAddresses>
           <OPFMessageCopySubject>Project update</OPFMessageCopySubject>
           <OPFMessageCopyBody>The schedule is attached.</OPFMessageCopyBody>
+          <OPFMessageCopyHTMLBody>&lt;p&gt;The &lt;strong&gt;schedule&lt;/strong&gt; is attached.&lt;/p&gt;</OPFMessageCopyHTMLBody>
           <OPFMessageCopyPreview>The schedule is attached.</OPFMessageCopyPreview>
           <OPFMessageCopyMessageID>message-123</OPFMessageCopyMessageID>
           <OPFMessageCopySentTime>2026-07-21T15:30:00Z</OPFMessageCopySentTime>
@@ -40,6 +41,7 @@ enum ParserSmokeCheck {
         try require(message.sender.address == "jordan@example.com", "sender")
         try require(message.recipients.map(\.address) == ["archive@example.com"], "recipients")
         try require(message.body == "The schedule is attached.", "body")
+        try require(message.htmlBody?.contains("<strong>") == true, "HTML body")
         try require(!message.isRead, "read state")
         try require(message.isFlagged, "flag state")
         try require(message.attachments.first?.filename == "Schedule.pdf", "attachment name")

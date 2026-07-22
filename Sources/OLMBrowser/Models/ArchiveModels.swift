@@ -75,6 +75,7 @@ struct MessageSummary: Identifiable, Hashable, Sendable {
     let sentAt: Date
     let preview: String
     let body: String
+    let htmlBody: String?
     let isRead: Bool
     let isFlagged: Bool
     let attachments: [AttachmentSummary]

@@ -16,6 +16,7 @@ enum SearchSmokeCheck {
             sentAt: Date(),
             preview: "Budget review",
             body: "The approved lighthouse budget is ready.",
+            htmlBody: nil,
             isRead: true,
             isFlagged: false,
             attachments: []

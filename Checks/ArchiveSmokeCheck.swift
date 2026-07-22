@@ -32,10 +32,12 @@ private final class NativeOLMArchiveReaderCheck {
         _ = try reader.openArchive(at: readerURL)
         let first = try reader.loadMessages(in: folderID, offset: 0, limit: 100)
         let second = try reader.loadMessages(in: folderID, offset: first.nextOffset, limit: 100)
-        let ids = Set((first.messages + second.messages).map(\.id))
+        let combined = first.messages + second.messages
+        let ids = Set(combined.map(\.id))
         guard first.nextOffset == 100, second.nextOffset == 200, ids.count == 200 else {
             throw CheckFailure("Paging returned duplicate or incorrect offsets")
         }
+        print("HTML messages in paging sample: \(combined.filter { $0.htmlBody != nil }.count)")
         return ids.count
     }
 }

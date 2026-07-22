@@ -2,6 +2,7 @@ import SwiftUI
 
 struct MessageDetailView: View {
     @EnvironmentObject private var store: ArchiveStore
+    @State private var bodyMode: BodyMode = .html
 
     var body: some View {
         if let message = store.selectedMessage {
@@ -12,10 +13,35 @@ struct MessageDetailView: View {
                     Divider()
                         .padding(.vertical, 18)
 
-                    Text(message.body)
-                        .font(.body)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    if message.htmlBody != nil {
+                        HStack {
+                            Picker("Message body", selection: $bodyMode) {
+                                Text("HTML").tag(BodyMode.html)
+                                Text("Plain Text").tag(BodyMode.plainText)
+                            }
+                            .pickerStyle(.segmented)
+                            .labelsHidden()
+                            .frame(width: 190)
+                            Spacer()
+                            if bodyMode == .html {
+                                Label("Remote content blocked", systemImage: "shield.checkered")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .padding(.bottom, 12)
+                    }
+
+                    if bodyMode == .html, let html = message.htmlBody {
+                        HTMLMessageView(html: html)
+                            .id(message.id)
+                            .frame(minHeight: 480)
+                    } else {
+                        Text(message.body)
+                            .font(.body)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
 
                     if !message.attachments.isEmpty {
                         Divider()
@@ -27,6 +53,9 @@ struct MessageDetailView: View {
                 .frame(maxWidth: 760, alignment: .leading)
             }
             .background(.background)
+            .onChange(of: message.id) {
+                bodyMode = message.htmlBody == nil ? .plainText : .html
+            }
         } else {
             ContentUnavailableView(
                 "No Message Selected",
@@ -35,6 +64,11 @@ struct MessageDetailView: View {
             )
         }
     }
+}
+
+private enum BodyMode: Hashable {
+    case html
+    case plainText
 }
 
 private struct MessageHeader: View {

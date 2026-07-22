@@ -5,6 +5,7 @@ final class OLMMessageParser: NSObject, XMLParserDelegate {
     private var text = ""
     private var subject = ""
     private var body = ""
+    private var htmlBody = ""
     private var preview = ""
     private var messageID = ""
     private var sentDateText = ""
@@ -40,6 +41,7 @@ final class OLMMessageParser: NSObject, XMLParserDelegate {
             sentAt: resolvedDate,
             preview: resolvedPreview,
             body: resolvedBody,
+            htmlBody: htmlBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : htmlBody,
             isRead: isRead,
             isFlagged: isFlagged,
             attachments: attachments
@@ -97,6 +99,7 @@ final class OLMMessageParser: NSObject, XMLParserDelegate {
         switch elementName {
         case "OPFMessageCopySubject": subject = text
         case "OPFMessageCopyBody": body = text
+        case "OPFMessageCopyHTMLBody": htmlBody = text
         case "OPFMessageCopyPreview": preview = text
         case "OPFMessageCopyMessageID": messageID = text
         case "OPFMessageCopySentTime": sentDateText = text
@@ -115,6 +118,7 @@ final class OLMMessageParser: NSObject, XMLParserDelegate {
         text = ""
         subject = ""
         body = ""
+        htmlBody = ""
         preview = ""
         messageID = ""
         sentDateText = ""

@@ -14,6 +14,13 @@ struct MessageListView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
+                Menu("Export Loaded") {
+                    ForEach(MessageExportFormat.allCases) { format in
+                        Button(format.label) { store.exportLoadedMessages(format: format) }
+                    }
+                }
+                .disabled(store.visibleMessages.isEmpty)
+                .help("Export the messages currently loaded in this list")
                 if !store.searchText.isEmpty {
                     Toggle("This Folder", isOn: $store.isSearchFolderScoped)
                         .toggleStyle(.checkbox)
@@ -83,7 +90,8 @@ struct MessageListView: View {
         if store.searchText.isEmpty,
            let total = store.selectedFolder?.messageCount,
            total > count {
-            return "Showing \(count.formatted()) of \(total.formatted())"
+            let suffix = store.indexProgress.isComplete ? "" : " · chronological order finalizes after indexing"
+            return "Showing \(count.formatted()) of \(total.formatted())\(suffix)"
         }
         return "\(count) \(count == 1 ? "message" : "messages")"
     }

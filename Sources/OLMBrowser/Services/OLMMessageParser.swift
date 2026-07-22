@@ -26,8 +26,9 @@ final class OLMMessageParser: NSObject, XMLParserDelegate {
         guard parser.parse() else { return nil }
 
         let resolvedSender = sender ?? MailParticipant(name: "Unknown Sender", address: "")
+        let parsedReceivedDate = Self.parseDate(receivedDateText)
         let resolvedDate = Self.parseDate(sentDateText)
-            ?? Self.parseDate(receivedDateText)
+            ?? parsedReceivedDate
             ?? .distantPast
         let resolvedBody = body.isEmpty ? preview : body
         let resolvedPreview = preview.isEmpty
@@ -42,7 +43,9 @@ final class OLMMessageParser: NSObject, XMLParserDelegate {
             recipients: recipients,
             ccRecipients: ccRecipients,
             bccRecipients: bccRecipients,
+            messageID: messageID.isEmpty ? nil : messageID,
             sentAt: resolvedDate,
+            receivedAt: parsedReceivedDate,
             preview: resolvedPreview,
             body: resolvedBody,
             htmlBody: htmlBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : htmlBody,
@@ -116,7 +119,7 @@ final class OLMMessageParser: NSObject, XMLParserDelegate {
         case "OPFMessageCopyReceivedTime": receivedDateText = text
         case "OPFMessageGetIsRead": isRead = Self.parseBoolean(text, defaultValue: true)
         case "OPFMessageCopyGetFlagStatus":
-            isFlagged = !["", "0", "none", "false"].contains(text.lowercased())
+            isFlagged = Self.parseBoolean(text, defaultValue: false)
         default: break
         }
         if elements.last == elementName { elements.removeLast() }
@@ -143,10 +146,13 @@ final class OLMMessageParser: NSObject, XMLParserDelegate {
     }
 
     private static func parseBoolean(_ value: String, defaultValue: Bool) -> Bool {
-        switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-        case "1", "true", "yes": true
-        case "0", "false", "no": false
-        default: defaultValue
+        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        switch normalized {
+        case "1", "true", "yes": return true
+        case "0", "false", "no": return false
+        default:
+            if let numeric = Double(normalized) { return numeric != 0 }
+            return defaultValue
         }
     }
 

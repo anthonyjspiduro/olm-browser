@@ -5,8 +5,9 @@ struct HTMLMessageView: NSViewRepresentable {
     let html: String
     let inlineImages: [String: String]
     let allowedRemoteImageOrigins: [String]
+    let onExternalLinkRequested: (URL) -> Void
 
-    func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeCoordinator() -> Coordinator { Coordinator(onExternalLinkRequested: onExternalLinkRequested) }
 
     func makeNSView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
@@ -28,6 +29,7 @@ struct HTMLMessageView: NSViewRepresentable {
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
+        context.coordinator.onExternalLinkRequested = onExternalLinkRequested
         context.coordinator.inlineImageHandler.update(resources: inlineImages)
         let resolved = Self.resolvingInlineImages(in: html, images: inlineImages)
         let document = Self.securedDocument(
@@ -98,6 +100,11 @@ struct HTMLMessageView: NSViewRepresentable {
     final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
         var lastDocument: String?
         fileprivate let inlineImageHandler = InlineImageSchemeHandler()
+        var onExternalLinkRequested: (URL) -> Void
+
+        init(onExternalLinkRequested: @escaping (URL) -> Void) {
+            self.onExternalLinkRequested = onExternalLinkRequested
+        }
 
         func webView(
             _ webView: WKWebView,
@@ -106,6 +113,9 @@ struct HTMLMessageView: NSViewRepresentable {
         ) {
             if navigationAction.navigationType == .linkActivated {
                 decisionHandler(.cancel)
+                if let url = navigationAction.request.url {
+                    onExternalLinkRequested(url)
+                }
                 return
             }
             let scheme = navigationAction.request.url?.scheme?.lowercased()
@@ -118,7 +128,11 @@ struct HTMLMessageView: NSViewRepresentable {
             for navigationAction: WKNavigationAction,
             windowFeatures: WKWindowFeatures
         ) -> WKWebView? {
-            nil
+            if navigationAction.navigationType == .linkActivated,
+               let url = navigationAction.request.url {
+                onExternalLinkRequested(url)
+            }
+            return nil
         }
     }
 }

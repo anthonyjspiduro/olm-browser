@@ -22,9 +22,9 @@ The reader has been validated against a 26 GB OLM containing 83,172 messages acr
 - Rejection of encrypted entries and bounded entry decompression
 - Automatic Outlook account and folder discovery
 - Expandable nested folder hierarchy
-- Folder message counts
-- Incremental 100-message paging while scrolling
-- Sender, To, CC, BCC, subject, sent date, preview, body, read state, and flag display
+- Folder message counts and accurate unread totals after indexing
+- Incremental 100-message paging with globally chronological order from the completed index
+- Sender, To, CC, BCC, subject, sent/received dates, folder, message ID, attachment count, read state, and flag display
 - Attachment filename, content type, and size display
 - Attachment payload resolution through each message's archive reference
 - Quick Look attachment preview, Save As, drag-to-Finder, and export-all
@@ -42,6 +42,7 @@ The reader has been validated against a 26 GB OLM containing 83,172 messages acr
   - Insecure HTTP images always blocked with a visible status
   - Frames, objects, forms, media, and network connections blocked
   - Navigation and popup creation blocked
+  - Explicit HTTPS link opening through a privacy confirmation; WebKit navigation remains blocked
   - Referrer suppression
   - Responsive images and dark-mode support
   - An explicit HTML/Plain Text toggle
@@ -57,7 +58,8 @@ The reader has been validated against a 26 GB OLM containing 83,172 messages acr
 - Search-index rebuild, cache deletion/compaction, and cache-size reporting
 - Archive entry, attachment payload, duplicate-path, and unreadable-message diagnostics
 - Explicit JSON diagnostic-report export containing aggregate health metrics only
-- Message export as `.eml` (including available attachments), plain text, and JSON
+- Message export as `.eml` (including available attachments), plain text, JSON, PDF, and CSV
+- Batch export of up to 1,000 currently loaded messages with a 1 GB output limit
 - Background archive opening, paging, search, and indexing
 - Standalone parser, paging, attachment, export, diagnostics, structured-search, and FTS5 smoke checks
 - Synthetic remote-image policy, CSP, local-CID, and per-message approval smoke checks
@@ -101,6 +103,10 @@ Search results may be incomplete until the progress indicator finishes. Queries 
 
 Search results load in 100-message pages. The message-list controls can restrict a query to the selected folder and sort by relevance, newest date, or oldest date.
 
+Folder browsing remains available while indexing is incomplete using archive order. Once the resumable index finishes—or immediately when a complete cache already exists—the selected folder reloads in globally descending sent-date order and accurate per-folder unread totals appear. Messages without a usable date sort last with a stable archive-path tie-breaker.
+
+The message Export menu supports EML, plain text, JSON, PDF, and CSV. “Export Loaded” in the message-list header exports only messages already loaded into the current folder or search list; it never silently loads the rest of an archive or result set. CSV batch export creates one quote-escaped table and neutralizes spreadsheet formula-leading cells, while other formats create collision-safe individual files. A batch is limited to 1,000 messages and 1 GB of generated output.
+
 ## Privacy and safety
 
 - The OLM is opened for reading only.
@@ -113,6 +119,7 @@ Search results load in 100-message pages. The message-list controls can restrict
 - Insecure `http:` images are never allowlisted. The viewer reports when HTTP images remain unavailable, even after approved HTTPS images load.
 - The HTML viewer uses a nonpersistent WebKit data store and a `nil` external base URL.
 - JavaScript, scripts, forms and form submission, frames and iframes, objects and embeds, audio and video, WebSocket/fetch/XHR connections, workers, manifests, popup creation, link navigation, and external base URLs remain blocked after image approval. Referrer transmission is suppressed.
+- Clicking an HTML link never navigates the embedded viewer. Only HTTPS URLs without embedded credentials may cross the boundary; each click requires confirmation warning that the destination can observe the user's IP address, access time, and browser activity before opening in the default browser. HTTP, `mailto:`, and other schemes remain blocked.
 - Inline images are read only from resolved local attachment entries and served through a bounded, app-local WebKit scheme; unmatched CIDs remain blocked.
 - Remote image documents cannot read local attachment data: attachment bytes never enter the message HTML, scripts and connections are disabled, and the only newly permitted network requests are image loads to the selected message's HTTPS origin set.
 - Attachment and message exports happen only after an explicit user action.
@@ -122,24 +129,20 @@ Search results load in 100-message pages. The message-list controls can restrict
 
 ## Known limitations
 
-- HTML links are displayed but navigation is intentionally blocked.
-- Folder unread totals are not fully calculated.
+- Embedded HTML navigation remains intentionally blocked; approved HTTPS links open outside the app.
 - The packaged build is Apple Silicon only and ad-hoc signed, not notarized.
 - Calendar and contact records are not browsable yet.
 - The managed Command Line Tools installation does not include XCTest, so checks are standalone executables.
 
 ## Planned features
 
-1. Add richer message headers, accurate unread totals, and globally chronological folder paging.
-2. Add explicit external-link opening with a confirmation boundary.
-3. Add PDF/CSV and batch message export.
-4. Add CRC verification, unsupported-compression reporting, and more granular malformed-XML recovery.
-5. Add detailed phase/byte progress during initial archive opening.
-6. Add recent archives, drag-and-drop opening, and persistent security-scoped access.
-7. Reconstruct conversations and expose contacts and calendar records.
-8. Add optional local or explicitly configured grounded AI features.
-9. Produce a universal binary, Developer ID signature, notarization, and distributable DMG.
-10. Expand accessibility, keyboard navigation, localization, and cross-version OLM testing.
+1. Add CRC verification, unsupported-compression reporting, and more granular malformed-XML recovery.
+2. Add detailed phase/byte progress during initial archive opening.
+3. Add recent archives, drag-and-drop opening, and persistent security-scoped access.
+4. Reconstruct conversations and expose contacts and calendar records.
+5. Add optional local or explicitly configured grounded AI features.
+6. Produce a universal binary, Developer ID signature, notarization, and distributable DMG.
+7. Expand accessibility, keyboard navigation, localization, and cross-version OLM testing.
 
 ## Project layout
 

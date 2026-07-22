@@ -103,6 +103,23 @@ enum RemoteImageSecuritySmokeCheck {
         approval.block()
         try require(!approval.isApproved(for: second), "images can be blocked again")
 
+        try require(
+            ExternalLinkPolicy.approvedDestination(URL(string: "https://example.invalid/path")!) != nil,
+            "HTTPS external link can cross the confirmation boundary"
+        )
+        try require(
+            ExternalLinkPolicy.approvedDestination(URL(string: "http://example.invalid/path")!) == nil,
+            "HTTP external link remains blocked"
+        )
+        try require(
+            ExternalLinkPolicy.approvedDestination(URL(string: "https://user@example.invalid/path")!) == nil,
+            "credential-bearing external link remains blocked"
+        )
+        try require(
+            ExternalLinkPolicy.approvedDestination(URL(string: "mailto:person@example.invalid")!) == nil,
+            "non-web external link remains blocked"
+        )
+
         print("Remote image security smoke check passed")
     }
 

@@ -13,7 +13,10 @@ struct FolderSidebar: View {
                 ForEach(snapshot.accounts) { account in
                     Section(account.displayName) {
                         OutlineGroup(folderTree(for: account.id), children: \.children) { node in
-                            FolderRow(folder: node.folder)
+                            FolderRow(
+                                folder: node.folder,
+                                showsUnreadCount: store.unreadCountsAreAccurate
+                            )
                                 .tag(node.folder.id)
                         }
                     }
@@ -71,18 +74,21 @@ private struct ArchiveHeader: View {
 
 private struct FolderRow: View {
     let folder: MailFolder
+    let showsUnreadCount: Bool
 
     var body: some View {
         HStack(spacing: 8) {
             Label(folder.name, systemImage: folder.kind.symbolName)
                 .lineLimit(1)
             Spacer(minLength: 6)
-            if folder.unreadCount > 0 {
+            if showsUnreadCount && folder.unreadCount > 0 {
                 Text(folder.unreadCount, format: .number)
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
             }
         }
-        .help("\(folder.messageCount.formatted()) messages")
+        .help(showsUnreadCount
+              ? "\(folder.messageCount.formatted()) messages · \(folder.unreadCount.formatted()) unread"
+              : "\(folder.messageCount.formatted()) messages · unread total available after indexing")
     }
 }

@@ -67,7 +67,9 @@ struct PreviewArchiveReader: OLMArchiveReading {
                 recipients: [recipient],
                 ccRecipients: [],
                 bccRecipients: [],
+                messageID: "preview-message-1@example.invalid",
                 sentAt: Date().addingTimeInterval(-3_600),
+                receivedAt: Date().addingTimeInterval(-3_540),
                 preview: "Here is the revised timeline we discussed, including the remaining review milestones…",
                 body: "Hi,\n\nHere is the revised timeline we discussed, including the remaining review milestones. Please review the attached schedule before Thursday.\n\nThanks,\nJordan",
                 htmlBody: "<p>Hi,</p><p>Here is the <strong>revised timeline</strong> we discussed. Please review the attached schedule before Thursday.</p><p>Thanks,<br>Jordan</p>",
@@ -90,7 +92,9 @@ struct PreviewArchiveReader: OLMArchiveReading {
                 recipients: [recipient],
                 ccRecipients: [],
                 bccRecipients: [],
+                messageID: "preview-message-2@example.invalid",
                 sentAt: Date().addingTimeInterval(-86_400),
+                receivedAt: Date().addingTimeInterval(-86_340),
                 preview: "Approved. Please keep the final amount within the range noted below…",
                 body: "Approved. Please keep the final amount within the range noted below and send the completed estimate to the team.",
                 htmlBody: nil,
@@ -106,7 +110,9 @@ struct PreviewArchiveReader: OLMArchiveReading {
                 recipients: [sender],
                 ccRecipients: [],
                 bccRecipients: [],
+                messageID: "preview-message-3@example.invalid",
                 sentAt: Date().addingTimeInterval(-172_800),
+                receivedAt: Date().addingTimeInterval(-172_740),
                 preview: "The review is complete and the deliverables are ready for the next stage…",
                 body: "The review is complete and the deliverables are ready for the next stage. I included a concise status recap below.",
                 htmlBody: nil,
@@ -122,7 +128,9 @@ struct PreviewArchiveReader: OLMArchiveReading {
                 recipients: [recipient],
                 ccRecipients: [],
                 bccRecipients: [],
+                messageID: "preview-message-4@example.invalid",
                 sentAt: Date().addingTimeInterval(-259_200),
+                receivedAt: Date().addingTimeInterval(-259_140),
                 preview: "The client consolidated their feedback into three requested changes…",
                 body: "The client consolidated their feedback into three requested changes. The notes here are representative design data only.",
                 htmlBody: nil,
@@ -158,6 +166,9 @@ struct PreviewArchiveReader: OLMArchiveReading {
 
     func operationalStatus() -> ArchiveOperationalStatus {
         ArchiveOperationalStatus(archiveEntries: 0, messageEntries: 0, attachmentEntries: 0, duplicateEntryPaths: 0, failedMessageEntries: 0, cacheByteCount: 0)
+    }
+    func folderUnreadCounts() -> [MailFolder.ID: Int]? {
+        ["preview-inbox": 38, "preview-sent": 0, "preview-projects": 5]
     }
     func resetSearchIndex() throws {}
     func deleteSearchCache() throws {}

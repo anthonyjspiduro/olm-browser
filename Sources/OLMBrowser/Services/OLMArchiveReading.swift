@@ -42,6 +42,7 @@ protocol OLMArchiveReading: Sendable {
     ) throws -> MessagePage
     func attachmentData(for attachment: AttachmentSummary) throws -> Data
     func operationalStatus() -> ArchiveOperationalStatus
+    func folderUnreadCounts() -> [MailFolder.ID: Int]?
     func resetSearchIndex() throws
     func deleteSearchCache() throws
 }

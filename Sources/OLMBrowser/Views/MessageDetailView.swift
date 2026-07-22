@@ -48,7 +48,8 @@ struct MessageDetailView: View {
                             inlineImages: store.inlineImages,
                             allowedRemoteImageOrigins: remoteImageApproval.isApproved(for: remoteIdentity(message))
                                 ? policy.httpsOrigins
-                                : []
+                                : [],
+                            onExternalLinkRequested: store.requestOpenExternalLink
                         )
                             .id(remoteIdentity(message))
                             .frame(minHeight: 480)
@@ -147,6 +148,7 @@ private enum BodyMode: Hashable {
 
 private struct MessageHeader: View {
     @EnvironmentObject private var store: ArchiveStore
+    @State private var showsMoreHeaders = false
     let message: MessageSummary
 
     var body: some View {
@@ -193,14 +195,57 @@ private struct MessageHeader: View {
                     }
                 }
                 GridRow {
-                    Text("Date")
+                    Text("Sent")
                         .foregroundStyle(.secondary)
                     Text(message.sentAt.formatted(date: .long, time: .shortened))
                         .textSelection(.enabled)
                 }
             }
             .font(.callout)
+
+            DisclosureGroup("More Headers", isExpanded: $showsMoreHeaders) {
+                Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 7) {
+                    if let receivedAt = message.receivedAt {
+                        GridRow {
+                            Text("Received").foregroundStyle(.secondary)
+                            Text(receivedAt.formatted(date: .long, time: .complete))
+                                .textSelection(.enabled)
+                        }
+                    }
+                    GridRow {
+                        Text("Folder").foregroundStyle(.secondary)
+                        Text(store.snapshot?.folders.first { $0.id == message.folderID }?.name ?? message.folderID)
+                            .textSelection(.enabled)
+                    }
+                    GridRow {
+                        Text("Status").foregroundStyle(.secondary)
+                        Text(statusLabel)
+                            .textSelection(.enabled)
+                    }
+                    GridRow {
+                        Text("Attachments").foregroundStyle(.secondary)
+                        Text(message.attachments.count, format: .number)
+                    }
+                    if let messageID = message.messageID {
+                        GridRow {
+                            Text("Message ID").foregroundStyle(.secondary)
+                            Text(messageID)
+                                .lineLimit(2)
+                                .textSelection(.enabled)
+                        }
+                    }
+                }
+                .font(.caption)
+                .padding(.top, 6)
+            }
+            .font(.callout)
         }
+    }
+
+    private var statusLabel: String {
+        [message.isRead ? "Read" : "Unread", message.isFlagged ? "Flagged" : nil]
+            .compactMap { $0 }
+            .joined(separator: " · ")
     }
 }
 

@@ -41,7 +41,7 @@ The source URL must only be opened for reading. File access is retained using a 
 
 ### Parsing
 
-The OLM parser turns Outlook XML into normalized accounts, folders, messages, contacts, calendar items, and attachment references. XML parsing is streaming rather than DOM-based. Message bodies are loaded lazily and cached under a bounded policy.
+The OLM parser turns Outlook XML into normalized accounts, folders, messages, contacts, calendar items, and attachment references. Normalized message headers include sender, To/CC/BCC, sent and received dates, message ID, read/flag state, and attachment metadata. XML parsing is streaming rather than DOM-based. Message bodies are loaded lazily and cached under a bounded policy.
 
 ### Indexing
 
@@ -63,7 +63,7 @@ HTML mail is rendered in a locked-down `WKWebView` with an ephemeral data store 
 
 Confirmation creates an in-memory approval keyed to the archive-open session, folder, and selected message. The document is then rebuilt with `img-src data:` plus only the sorted, exact HTTPS origins discovered in that message. Approval is cleared when selection changes, the archive is reopened, the app quits, or “Block Remote Images” is pressed; it never trusts a sender, domain, folder, archive, redirect target, or future launch. `http:` image URLs are counted but never admitted, and a visible “HTTP images remain blocked” status remains after HTTPS approval.
 
-The CSP is placed before all message markup and continues to set `default-src`, `script-src`, `frame-src`, `child-src`, `media-src`, `connect-src`, `object-src`, `base-uri`, `form-action`, `manifest-src`, and `worker-src` to `'none'` as applicable. JavaScript is also disabled in WebKit preferences; form submission, popup creation, and all link navigation are intercepted; and the document sets `no-referrer`. Thus image approval does not enable forms, frames/iframes, objects/embeds, audio/video, WebSocket/fetch/XHR, workers, external base URLs, navigation, or referrer transmission.
+The CSP is placed before all message markup and continues to set `default-src`, `script-src`, `frame-src`, `child-src`, `media-src`, `connect-src`, `object-src`, `base-uri`, `form-action`, `manifest-src`, and `worker-src` to `'none'` as applicable. JavaScript is also disabled in WebKit preferences; form submission, popup creation, and all link navigation are intercepted; and the document sets `no-referrer`. Thus image approval does not enable forms, frames/iframes, objects/embeds, audio/video, WebSocket/fetch/XHR, workers, external base URLs, navigation, or referrer transmission. A user-activated link is canceled inside WebKit and may only be handed to the default browser after an explicit privacy confirmation; the boundary accepts credential-free HTTPS URLs and rejects HTTP, `mailto:`, and other schemes.
 
 Plain text remains available as a fallback. Resolved inline image attachments are bounded, read from the archive, and mapped from `cid:` references to opaque URLs served by an in-memory `WKURLSchemeHandler`. Attachment bytes never enter the message HTML, and neither archive paths nor attachment URLs are exposed to the document. Unmatched CIDs remain blocked. The app-local scheme is admitted only by `img-src`; remote content cannot inspect its responses because scripts and connections stay disabled.
 
@@ -75,7 +75,7 @@ Previewing creates a UUID-isolated temporary file and invokes Quick Look. Drag-t
 
 ### Search query path
 
-The index schema stores folder ID, sent timestamp, and attachment presence as unindexed FTS columns beside separate searchable sender, To, CC, and BCC fields. Schema version 3 discards only an older derived FTS table, resets its checkpoint, and resumes in 250-message transactions. Structured `from:`, `to:`, `cc:`, `bcc:`, `folder:`, date, and attachment filter values are bound SQLite parameters; free terms alone become an escaped FTS expression. Results are counted and returned in 100-message pages with relevance or date ordering.
+The index schema stores folder ID, sent timestamp, attachment presence, and read state as unindexed FTS columns beside separate searchable sender, To, CC, and BCC fields. Schema version 5 discards only an older derived FTS table, resets its checkpoint, and resumes in 250-message transactions. Outlook numeric booleans, including scientific `0E0`/`1E0` encodings, are normalized during parsing. Once complete, grouped `is_read` counts become the authoritative folder unread totals and folder pages use a global `sent_at DESC, entry_path ASC` order. Before completion, archive-order paging remains available and unread badges stay hidden rather than displaying provisional totals. Structured `from:`, `to:`, `cc:`, `bcc:`, `folder:`, date, and attachment filter values are bound SQLite parameters; free terms alone become an escaped FTS expression. Results are counted and returned in 100-message pages with relevance or date ordering.
 
 ### Operations and export
 
@@ -83,7 +83,9 @@ Archive opening and indexing run in cancelable tasks. The operations panel repor
 
 Diagnostic-report export is an explicit local Save action. The versioned JSON report contains only aggregate archive size, account/folder/message/attachment/duplicate/unreadable counts, search-index progress, cache size, generation time, and privacy declarations. It never includes the archive path or filename, account/folder names, message identifiers or content, participants, attachment names, payloads, or cache contents.
 
-Message export is explicit and local. Plain-text and JSON exports include normalized sender, To, CC, and BCC fields. RFC 822 `.eml` export preserves those participant headers, creates multipart plain/HTML content, and includes only resolved, size-bounded attachments.
+Message export is explicit and local. Plain-text, JSON, PDF, and CSV exports include normalized headers and body content. PDF generation uses local Core Graphics/Core Text layout and never renders remote HTML. CSV follows RFC-style quote escaping and prefixes spreadsheet formula-leading cells with an apostrophe. RFC 822 `.eml` export preserves participant/message headers, creates multipart plain/HTML content, and includes only resolved, size-bounded attachments.
+
+Batch export operates only on messages already loaded in the active folder or search list. CSV produces one atomic table; EML, text, JSON, and PDF use a temporary staging directory followed by collision-safe copies to the chosen folder. The batch never overwrites existing files, is capped at 1,000 messages and 1 GB of generated output, and does not broaden attachment extraction limits.
 
 ### AI boundary
 

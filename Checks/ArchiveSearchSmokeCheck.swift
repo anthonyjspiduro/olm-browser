@@ -5,11 +5,27 @@ enum ArchiveSearchSmokeCheck {
     static func main() throws {
         guard CommandLine.arguments.count == 2 else { throw Failure("Usage: archive-search-check /path/to/archive.olm") }
         let reader = NativeOLMArchiveReader()
-        _ = try reader.openArchive(at: URL(fileURLWithPath: CommandLine.arguments[1]))
+        let snapshot = try reader.openArchive(at: URL(fileURLWithPath: CommandLine.arguments[1]))
         let progress = ProgressBox()
         try reader.buildSearchIndex { progress.value = $0 }
         let finalProgress = progress.value
         guard finalProgress.isComplete else { throw Failure("Index did not complete") }
+        guard let pagingFolder = snapshot.folders.first(where: { $0.messageCount > 150 }) else {
+            throw Failure("No folder large enough for chronological paging validation")
+        }
+        let chronologicalFirst = try reader.loadMessages(in: pagingFolder.id, offset: 0, limit: 100)
+        let chronologicalSecond = try reader.loadMessages(
+            in: pagingFolder.id, offset: chronologicalFirst.nextOffset, limit: 100
+        )
+        let chronologicalMessages = chronologicalFirst.messages + chronologicalSecond.messages
+        guard zip(chronologicalMessages, chronologicalMessages.dropFirst()).allSatisfy({ pair in
+            pair.0.sentAt >= pair.1.sentAt
+        }) else {
+            throw Failure("Folder paging is not globally chronological")
+        }
+        guard let unreadCounts = reader.folderUnreadCounts() else {
+            throw Failure("Accurate unread totals were unavailable after indexing")
+        }
 
         let first = try reader.searchMessages(
             matching: "has:attachment", folderID: nil, offset: 0, limit: 100, sort: .newest
@@ -47,6 +63,8 @@ enum ArchiveSearchSmokeCheck {
         print("Indexed messages: \(finalProgress.indexed)")
         print("Unreadable messages: \(finalProgress.failed)")
         print("Messages with attachments: \(first.totalCount)")
+        print("Unread messages across folders: \(unreadCounts.values.reduce(0, +))")
+        print("Globally chronological folder paging check passed")
         print("Structured filters including CC/BCC, folder scope, sorting, and search paging checks passed")
     }
 }

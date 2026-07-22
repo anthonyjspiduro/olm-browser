@@ -15,7 +15,9 @@ enum SearchSmokeCheck {
             recipients: [],
             ccRecipients: [MailParticipant(name: "Casey Copy", address: "cc@example.invalid")],
             bccRecipients: [MailParticipant(name: "Blake Hidden", address: "bcc@example.invalid")],
+            messageID: "search-message@example.invalid",
             sentAt: Date(),
+            receivedAt: nil,
             preview: "Budget review",
             body: "The approved lighthouse budget is ready.",
             htmlBody: nil,
@@ -23,10 +25,29 @@ enum SearchSmokeCheck {
             isFlagged: false,
             attachments: []
         )
+        let olderUnreadMessage = MessageSummary(
+            id: "older-message",
+            folderID: "account::Inbox",
+            subject: "Older synthetic message",
+            sender: sender,
+            recipients: [],
+            ccRecipients: [],
+            bccRecipients: [],
+            messageID: "older-message@example.invalid",
+            sentAt: message.sentAt.addingTimeInterval(-3_600),
+            receivedAt: nil,
+            preview: "Older preview",
+            body: "Older body",
+            htmlBody: nil,
+            isRead: false,
+            isFlagged: false,
+            attachments: []
+        )
 
         try index.beginBatch()
         try index.insert(message, entryPath: "message_1.xml")
-        try index.commitBatch(nextOffset: 1, complete: true)
+        try index.insert(olderUnreadMessage, entryPath: "message_2.xml")
+        try index.commitBatch(nextOffset: 2, complete: true)
         let results = try index.searchPaths(
             matching: "lighthouse budget from:jordan after:2020-01-01",
             folderID: "account::Inbox", offset: 0, limit: 10, sort: .relevance
@@ -40,6 +61,15 @@ enum SearchSmokeCheck {
         )
         guard copied.paths == ["message_1.xml"], copied.totalCount == 1 else {
             throw CheckFailure("CC/BCC filters did not return the indexed message")
+        }
+        let folderPage = try index.folderPagePaths(
+            folderID: "account::Inbox", offset: 0, limit: 10
+        )
+        guard folderPage?.paths == ["message_1.xml", "message_2.xml"] else {
+            throw CheckFailure("Folder paging was not globally chronological")
+        }
+        guard try index.unreadCountsByFolder()?["account::Inbox"] == 1 else {
+            throw CheckFailure("Unread folder total was not accurate")
         }
         let filtered = try index.searchPaths(
             matching: "has:attachment", folderID: nil, offset: 0, limit: 10, sort: .newest

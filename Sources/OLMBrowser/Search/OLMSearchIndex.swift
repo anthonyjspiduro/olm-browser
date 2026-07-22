@@ -42,11 +42,11 @@ final class OLMSearchIndex: @unchecked Sendable {
         try execute("PRAGMA journal_mode=WAL;")
         try execute("PRAGMA synchronous=NORMAL;")
         try execute("CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);")
-        if metadataValue(for: "schema_version") != "3" {
+        if metadataValue(for: "schema_version") != "5" {
             try execute("DROP TABLE IF EXISTS message_search;")
             try setMetadataValue("0", for: "next_entry_offset")
             try setMetadataValue("0", for: "complete")
-            try setMetadataValue("3", for: "schema_version")
+            try setMetadataValue("5", for: "schema_version")
         }
         try execute("""
             CREATE VIRTUAL TABLE IF NOT EXISTS message_search USING fts5(
@@ -54,6 +54,7 @@ final class OLMSearchIndex: @unchecked Sendable {
                 folder_id UNINDEXED,
                 sent_at UNINDEXED,
                 has_attachment UNINDEXED,
+                is_read UNINDEXED,
                 subject,
                 sender,
                 recipients,
@@ -68,8 +69,8 @@ final class OLMSearchIndex: @unchecked Sendable {
 
         let insertSQL = """
             INSERT INTO message_search
-                (entry_path, folder_id, sent_at, has_attachment, subject, sender, recipients, cc_recipients, bcc_recipients, preview, body, attachments)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                (entry_path, folder_id, sent_at, has_attachment, is_read, subject, sender, recipients, cc_recipients, bcc_recipients, preview, body, attachments)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """
         guard sqlite3_prepare_v2(handle, insertSQL, -1, &insertStatement, nil) == SQLITE_OK else {
             throw SearchIndexError.operationFailed(String(cString: sqlite3_errmsg(handle)))
@@ -106,6 +107,7 @@ final class OLMSearchIndex: @unchecked Sendable {
                 message.folderID,
                 String(message.sentAt.timeIntervalSince1970),
                 message.attachments.isEmpty ? "0" : "1",
+                message.isRead ? "1" : "0",
                 message.subject,
                 "\(message.sender.label) \(message.sender.address)",
                 message.recipients.map { "\($0.label) \($0.address)" }.joined(separator: " "),
@@ -159,6 +161,79 @@ final class OLMSearchIndex: @unchecked Sendable {
                     let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
                     return total + Int64(size)
                 }
+        }
+    }
+
+    func folderPagePaths(folderID: String, offset: Int, limit: Int) throws -> SearchPathPage? {
+        try lock.withLock {
+            guard metadataValue(for: "complete") == "1", let database else { return nil }
+            let start = max(0, offset)
+            let pageSize = max(1, limit)
+            var statement: OpaquePointer?
+            let sql = """
+                SELECT entry_path FROM message_search
+                WHERE folder_id = ?
+                ORDER BY CAST(sent_at AS REAL) DESC, entry_path ASC
+                LIMIT ? OFFSET ?;
+                """
+            guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
+                  let statement else {
+                throw SearchIndexError.operationFailed(String(cString: sqlite3_errmsg(database)))
+            }
+            defer { sqlite3_finalize(statement) }
+            sqlite3_bind_text(statement, 1, folderID, -1, Self.transient)
+            sqlite3_bind_int(statement, 2, Int32(pageSize))
+            sqlite3_bind_int(statement, 3, Int32(start))
+            var paths: [String] = []
+            while sqlite3_step(statement) == SQLITE_ROW {
+                if let text = sqlite3_column_text(statement, 0) {
+                    paths.append(String(cString: text))
+                }
+            }
+
+            var countStatement: OpaquePointer?
+            guard sqlite3_prepare_v2(
+                database,
+                "SELECT COUNT(*) FROM message_search WHERE folder_id = ?;",
+                -1,
+                &countStatement,
+                nil
+            ) == SQLITE_OK, let countStatement else {
+                throw SearchIndexError.operationFailed(String(cString: sqlite3_errmsg(database)))
+            }
+            defer { sqlite3_finalize(countStatement) }
+            sqlite3_bind_text(countStatement, 1, folderID, -1, Self.transient)
+            let total = sqlite3_step(countStatement) == SQLITE_ROW
+                ? Int(sqlite3_column_int64(countStatement, 0))
+                : paths.count
+            return SearchPathPage(
+                paths: paths,
+                nextOffset: min(start + paths.count, total),
+                totalCount: total
+            )
+        }
+    }
+
+    func unreadCountsByFolder() throws -> [String: Int]? {
+        try lock.withLock {
+            guard metadataValue(for: "complete") == "1", let database else { return nil }
+            var statement: OpaquePointer?
+            let sql = """
+                SELECT folder_id, COUNT(*) FROM message_search
+                WHERE is_read = '0'
+                GROUP BY folder_id;
+                """
+            guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
+                  let statement else {
+                throw SearchIndexError.operationFailed(String(cString: sqlite3_errmsg(database)))
+            }
+            defer { sqlite3_finalize(statement) }
+            var counts: [String: Int] = [:]
+            while sqlite3_step(statement) == SQLITE_ROW {
+                guard let text = sqlite3_column_text(statement, 0) else { continue }
+                counts[String(cString: text)] = Int(sqlite3_column_int64(statement, 1))
+            }
+            return counts
         }
     }
 

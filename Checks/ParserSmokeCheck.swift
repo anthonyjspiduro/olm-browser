@@ -23,8 +23,9 @@ enum ParserSmokeCheck {
           <OPFMessageCopyPreview>The schedule is attached.</OPFMessageCopyPreview>
           <OPFMessageCopyMessageID>message-123</OPFMessageCopyMessageID>
           <OPFMessageCopySentTime>2026-07-21T15:30:00Z</OPFMessageCopySentTime>
-          <OPFMessageGetIsRead>0</OPFMessageGetIsRead>
-          <OPFMessageCopyGetFlagStatus>1</OPFMessageCopyGetFlagStatus>
+          <OPFMessageCopyReceivedTime>2026-07-21T15:31:00Z</OPFMessageCopyReceivedTime>
+          <OPFMessageGetIsRead>0E0</OPFMessageGetIsRead>
+          <OPFMessageCopyGetFlagStatus>1E0</OPFMessageCopyGetFlagStatus>
           <OPFMessageCopyAttachmentList>
             <messageAttachment
               OPFAttachmentName="Schedule.pdf"
@@ -52,6 +53,8 @@ enum ParserSmokeCheck {
         try require(message.bccRecipients.map(\.address) == ["bcc@example.invalid"], "BCC recipients")
         try require(message.body == "The schedule is attached.", "body")
         try require(message.htmlBody?.contains("<strong>") == true, "HTML body")
+        try require(message.messageID == "message-123", "stored message identifier")
+        try require(message.receivedAt?.timeIntervalSince(message.sentAt) == 60, "received date")
         try require(!message.isRead, "read state")
         try require(message.isFlagged, "flag state")
         try require(message.attachments.first?.filename == "Schedule.pdf", "attachment name")

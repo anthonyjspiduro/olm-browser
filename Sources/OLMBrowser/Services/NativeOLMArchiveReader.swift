@@ -72,9 +72,24 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
 
     func loadMessages(in folderID: MailFolder.ID, offset: Int, limit: Int) throws -> MessagePage {
         let state = stateLock.withLock {
-            (archive, catalog.messageEntriesByFolder[folderID] ?? [])
+            (archive, catalog.messageEntriesByFolder[folderID] ?? [], searchIndex, entriesByPath)
         }
         guard let archive = state.0 else { throw ArchiveReaderError.unreadableArchive }
+        if let indexedPage = try state.2?.folderPagePaths(
+            folderID: folderID, offset: offset, limit: limit
+        ) {
+            let parser = OLMMessageParser()
+            let messages = indexedPage.paths.compactMap { path in
+                state.3[path].flatMap {
+                    parse(entry: $0, folderID: folderID, archive: archive, parser: parser)
+                }
+            }
+            return MessagePage(
+                messages: messages,
+                nextOffset: indexedPage.nextOffset,
+                totalCount: indexedPage.totalCount
+            )
+        }
         let orderedEntries = Array(state.1.reversed())
         let start = min(max(0, offset), orderedEntries.count)
         let end = min(start + max(1, limit), orderedEntries.count)
@@ -178,6 +193,10 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
         }
     }
 
+    func folderUnreadCounts() -> [MailFolder.ID: Int]? {
+        try? stateLock.withLock { try searchIndex?.unreadCountsByFolder() }
+    }
+
     func resetSearchIndex() throws {
         guard let index = stateLock.withLock({ searchIndex }) else { throw ArchiveReaderError.unreadableArchive }
         try index.reset(compact: false)
@@ -263,7 +282,7 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
             id: message.id, folderID: message.folderID, subject: message.subject,
             sender: message.sender, recipients: message.recipients,
             ccRecipients: message.ccRecipients, bccRecipients: message.bccRecipients,
-            sentAt: message.sentAt,
+            messageID: message.messageID, sentAt: message.sentAt, receivedAt: message.receivedAt,
             preview: message.preview, body: message.body, htmlBody: message.htmlBody,
             isRead: message.isRead, isFlagged: message.isFlagged, attachments: resolved
         )

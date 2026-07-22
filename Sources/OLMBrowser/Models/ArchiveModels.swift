@@ -119,7 +119,9 @@ struct MessageSummary: Identifiable, Hashable, Sendable {
     let recipients: [MailParticipant]
     let ccRecipients: [MailParticipant]
     let bccRecipients: [MailParticipant]
+    let messageID: String?
     let sentAt: Date
+    let receivedAt: Date?
     let preview: String
     let body: String
     let htmlBody: String?

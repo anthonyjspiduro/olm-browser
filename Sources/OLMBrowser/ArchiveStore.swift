@@ -20,6 +20,7 @@ final class ArchiveStore: ObservableObject {
     @Published private(set) var indexProgress = IndexProgress(indexed: 0, total: 0, isComplete: false)
     @Published private(set) var inlineImages: [String: String] = [:]
     @Published private(set) var operationalStatus: ArchiveOperationalStatus?
+    @Published private(set) var unreadCountsAreAccurate = false
 
     private let reader: any OLMArchiveReading
     private let pageSize = 100
@@ -86,6 +87,7 @@ final class ArchiveStore: ObservableObject {
                 }
                 guard !Task.isCancelled else { isOpening = false; return }
                 archiveSessionID = UUID()
+                unreadCountsAreAccurate = false
                 snapshot = loaded
                 searchText = ""
                 selectedFolderID = loaded.folders.first(where: { $0.kind == .inbox })?.id
@@ -214,6 +216,7 @@ final class ArchiveStore: ObservableObject {
         indexTask?.cancel()
         inlineImageTask?.cancel()
         snapshot = nil
+        unreadCountsAreAccurate = false
         archiveSessionID = UUID()
         selectedFolderID = nil
         selectedMessageID = nil
@@ -240,6 +243,7 @@ final class ArchiveStore: ObservableObject {
         Task {
             do {
                 try await Task.detached(priority: .utility) { try reader.resetSearchIndex() }.value
+                clearFolderUnreadCounts()
                 indexProgress = IndexProgress(indexed: 0, total: snapshot?.folders.reduce(0) { $0 + $1.messageCount } ?? 0, isComplete: false)
                 startIndexing()
             } catch { errorMessage = error.localizedDescription }
@@ -253,6 +257,7 @@ final class ArchiveStore: ObservableObject {
         Task {
             do {
                 try await Task.detached(priority: .utility) { try reader.deleteSearchCache() }.value
+                clearFolderUnreadCounts()
                 indexProgress = IndexProgress(indexed: 0, total: snapshot?.folders.reduce(0) { $0 + $1.messageCount } ?? 0, isComplete: false)
                 searchResults = []
             } catch { errorMessage = error.localizedDescription }
@@ -285,6 +290,21 @@ final class ArchiveStore: ObservableObject {
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    func requestOpenExternalLink(_ candidate: URL) {
+        guard let destination = ExternalLinkPolicy.approvedDestination(candidate) else {
+            errorMessage = "Only secure HTTPS links can be opened."
+            return
+        }
+        let alert = NSAlert()
+        alert.messageText = "Open External Link?"
+        alert.informativeText = "This will open \(destination.host ?? "the website") in your default browser. The website can learn your IP address, access time, and browser activity."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Open Link")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        NSWorkspace.shared.open(destination)
     }
 
     func loadInlineImages(for message: MessageSummary) {
@@ -398,6 +418,51 @@ final class ArchiveStore: ObservableObject {
         }
     }
 
+    func exportLoadedMessages(format: MessageExportFormat) {
+        let selectedMessages = visibleMessages
+        guard !selectedMessages.isEmpty else {
+            errorMessage = "There are no loaded messages to export."
+            return
+        }
+        let reader = reader
+        if format == .csv {
+            let panel = NSSavePanel()
+            panel.title = "Export Loaded Messages"
+            panel.nameFieldStringValue = "OLM Browser Messages.csv"
+            panel.allowedContentTypes = [.commaSeparatedText]
+            guard panel.runModal() == .OK, let destination = panel.url else { return }
+            Task {
+                do {
+                    try await Task.detached(priority: .userInitiated) {
+                        let data = try MessageBatchExporter.csvData(for: selectedMessages)
+                        try data.write(to: destination, options: [.atomic])
+                    }.value
+                } catch { errorMessage = error.localizedDescription }
+            }
+            return
+        }
+
+        let panel = NSOpenPanel()
+        panel.title = "Export Loaded Messages as \(format.label)"
+        panel.prompt = "Export"
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let destination = panel.url else { return }
+        Task {
+            do {
+                _ = try await Task.detached(priority: .userInitiated) {
+                    try MessageBatchExporter.exportFiles(
+                        selectedMessages,
+                        format: format,
+                        to: destination,
+                        reader: reader
+                    )
+                }.value
+            } catch { errorMessage = error.localizedDescription }
+        }
+    }
+
     func attachmentDragProvider(_ attachment: AttachmentSummary) -> NSItemProvider {
         let provider = NSItemProvider()
         provider.suggestedName = AttachmentFileStore.safeFilename(attachment.filename)
@@ -449,10 +514,58 @@ final class ArchiveStore: ObservableObject {
             }
             do {
                 try await withTaskCancellationHandler { try await worker.value } onCancel: { worker.cancel() }
+                if !Task.isCancelled { applyIndexedFolderMetadata() }
             } catch {
                 if !Task.isCancelled { errorMessage = error.localizedDescription }
             }
             refreshOperationalStatus()
         }
+    }
+
+    private func applyIndexedFolderMetadata() {
+        guard let counts = reader.folderUnreadCounts(), let current = snapshot else { return }
+        let folders = current.folders.map { folder in
+            MailFolder(
+                id: folder.id,
+                accountID: folder.accountID,
+                parentID: folder.parentID,
+                name: folder.name,
+                kind: folder.kind,
+                messageCount: folder.messageCount,
+                unreadCount: counts[folder.id, default: 0]
+            )
+        }
+        snapshot = ArchiveSnapshot(
+            identity: current.identity,
+            accounts: current.accounts,
+            folders: folders,
+            messages: current.messages
+        )
+        unreadCountsAreAccurate = true
+        if searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            resetPageState()
+            loadNextPage()
+        }
+    }
+
+    private func clearFolderUnreadCounts() {
+        guard let current = snapshot else { unreadCountsAreAccurate = false; return }
+        snapshot = ArchiveSnapshot(
+            identity: current.identity,
+            accounts: current.accounts,
+            folders: current.folders.map { folder in
+                MailFolder(
+                    id: folder.id,
+                    accountID: folder.accountID,
+                    parentID: folder.parentID,
+                    name: folder.name,
+                    kind: folder.kind,
+                    messageCount: folder.messageCount,
+                    unreadCount: 0
+                )
+            },
+            messages: current.messages
+        )
+        unreadCountsAreAccurate = false
     }
 }

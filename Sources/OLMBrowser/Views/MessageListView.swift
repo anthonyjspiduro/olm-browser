@@ -7,27 +7,53 @@ struct MessageListView: View {
         VStack(spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(store.selectedFolder?.name ?? "All Messages")
+                    Text(store.searchText.isEmpty ? (store.selectedFolder?.name ?? "All Messages") : "Search Results")
                         .font(.headline)
                     Text(resultLabel)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
+                if !store.indexProgress.isComplete {
+                    VStack(alignment: .trailing, spacing: 3) {
+                        Text("Indexing search")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        ProgressView(value: store.indexProgress.fractionCompleted)
+                            .frame(width: 90)
+                    }
+                }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
 
             Divider()
 
-            if store.visibleMessages.isEmpty {
+            if store.isSearching || (store.isLoadingPage && store.visibleMessages.isEmpty) {
+                ProgressView(store.isSearching ? "Searching archive…" : "Loading messages…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if store.visibleMessages.isEmpty {
                 ContentUnavailableView.search(text: store.searchText)
             } else {
                 List(store.visibleMessages, selection: $store.selectedMessageID) { message in
                     MessageRow(message: message)
                         .tag(message.id)
+                        .onAppear {
+                            if message.id == store.visibleMessages.last?.id, store.hasMoreMessages {
+                                store.loadNextPage()
+                            }
+                        }
                 }
                 .listStyle(.inset)
+                .safeAreaInset(edge: .bottom) {
+                    if store.isLoadingPage && !store.messages.isEmpty {
+                        ProgressView("Loading more…")
+                            .font(.caption)
+                            .padding(8)
+                            .frame(maxWidth: .infinity)
+                            .background(.bar)
+                    }
+                }
             }
         }
     }
@@ -36,6 +62,10 @@ struct MessageListView: View {
         let count = store.visibleMessages.count
         if store.snapshot?.identity.isPreviewData == true {
             return "\(count) preview \(count == 1 ? "message" : "messages")"
+        }
+        if !store.searchText.isEmpty {
+            let suffix = store.indexProgress.isComplete ? "" : " · index still building"
+            return "\(count) results\(suffix)"
         }
         if store.searchText.isEmpty,
            let total = store.selectedFolder?.messageCount,

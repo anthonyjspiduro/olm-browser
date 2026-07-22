@@ -86,3 +86,21 @@ struct ArchiveSnapshot: Sendable {
     let folders: [MailFolder]
     let messages: [MessageSummary]
 }
+
+struct MessagePage: Sendable {
+    let messages: [MessageSummary]
+    let nextOffset: Int
+    let totalCount: Int
+
+    var hasMore: Bool { nextOffset < totalCount }
+}
+
+struct IndexProgress: Sendable {
+    let indexed: Int
+    let total: Int
+    let isComplete: Bool
+
+    var fractionCompleted: Double {
+        total == 0 ? 1 : Double(indexed) / Double(total)
+    }
+}

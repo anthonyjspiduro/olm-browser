@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="background" x1="140" y1="80" x2="850" y2="940" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#3B82F6"/>
+      <stop offset="1" stop-color="#164E9A"/>
+    </linearGradient>
+    <linearGradient id="lid" x1="280" y1="285" x2="720" y2="455" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#EAF4FF"/>
+      <stop offset="1" stop-color="#BFD9F6"/>
+    </linearGradient>
+  </defs>
+  <rect x="56" y="56" width="912" height="912" rx="208" fill="url(#background)"/>
+  <rect x="240" y="376" width="544" height="388" rx="72" fill="#F7FBFF"/>
+  <path d="M288 310h448c27 0 48 21 48 48v78H240v-78c0-27 21-48 48-48Z" fill="url(#lid)"/>
+  <rect x="310" y="264" width="404" height="86" rx="38" fill="#FFFFFF" opacity=".96"/>
+  <path d="M332 480h360c24 0 44 20 44 44v154c0 24-20 44-44 44H332c-24 0-44-20-44-44V524c0-24 20-44 44-44Z" fill="#2872C7"/>
+  <path d="m305 508 207 143 207-143" fill="none" stroke="#FFFFFF" stroke-width="38" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="m307 695 151-126m259 126L566 569" fill="none" stroke="#DDEEFF" stroke-width="30" stroke-linecap="round"/>
+</svg>

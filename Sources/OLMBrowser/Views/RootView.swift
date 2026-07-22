@@ -22,6 +22,9 @@ struct RootView: View {
         } message: {
             Text(store.errorMessage ?? "Unknown error")
         }
+        .onOpenURL { url in
+            store.open(url)
+        }
     }
 }
 
@@ -42,8 +45,11 @@ private struct BrowserView: View {
         .searchable(
             text: $store.searchText,
             placement: .toolbar,
-            prompt: "Search this folder"
+            prompt: "Search entire archive"
         )
+        .onChange(of: store.searchText) {
+            store.searchTextChanged()
+        }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button {

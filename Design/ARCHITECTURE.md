@@ -47,6 +47,8 @@ The OLM parser turns Outlook XML into normalized accounts, folders, messages, co
 
 SQLite stores normalized metadata and indexing checkpoints. FTS5 stores searchable subject, participant, preview, body, and attachment-name text. Index construction is incremental, cancellable, resumable, and lower priority than interactive browsing.
 
+The implemented index commits every 250 entries and records the next central-directory offset in the same transaction. Search is available while indexing continues and becomes complete when the final batch commits. Cache filenames use a stable fingerprint of the archive path, size, and modification date.
+
 No attachment payload is copied into the index. Derived document text is opt-in and records the exact archive entry and message identifier from which it came.
 
 ### Presentation

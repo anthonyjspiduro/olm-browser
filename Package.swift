@@ -11,6 +11,10 @@ let package = Package(
         .executable(name: "OLMBrowser", targets: ["OLMBrowser"])
     ],
     targets: [
+        .systemLibrary(
+            name: "CSQLite",
+            path: "Sources/CSQLite"
+        ),
         .target(
             name: "CZipSupport",
             path: "Sources/CZipSupport",
@@ -19,7 +23,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "OLMBrowser",
-            dependencies: ["CZipSupport"],
+            dependencies: ["CZipSupport", "CSQLite"],
             path: "Sources/OLMBrowser"
         )
     ]

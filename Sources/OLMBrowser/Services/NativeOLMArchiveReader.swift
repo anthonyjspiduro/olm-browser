@@ -1,71 +1,162 @@
 import Foundation
 
-/// First production reader milestone. It catalogs the archive in place and
-/// loads a bounded sample from each folder. Paging and the persistent FTS index
-/// will replace the per-folder bound in the next milestone.
-struct NativeOLMArchiveReader: OLMArchiveReading {
-    private let messageLimitPerFolder = 40
+/// Stateful read-only OLM session. Catalog construction happens once; message
+/// bodies are parsed only for requested pages, search results, or indexing.
+final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
+    private let stateLock = NSLock()
+    private var archive: ZIPArchive?
+    private var catalog = Catalog()
+    private var entriesByPath: [String: ZIPEntry] = [:]
+    private var folderByEntryPath: [String: MailFolder.ID] = [:]
+    private var searchIndex: OLMSearchIndex?
 
     func openArchive(at url: URL) throws -> ArchiveSnapshot {
-        let resourceValues = try url.resourceValues(forKeys: [.fileSizeKey, .isReadableKey])
+        let resourceValues = try url.resourceValues(forKeys: [
+            .fileSizeKey, .isReadableKey, .contentModificationDateKey
+        ])
         guard resourceValues.isReadable != false else {
             throw ArchiveReaderError.unreadableArchive
         }
 
-        let archive = try ZIPArchive(url: url)
-        let catalog = buildCatalog(entries: archive.entries)
-        guard !catalog.messageEntriesByFolder.isEmpty else {
+        let openedArchive = try ZIPArchive(url: url)
+        let openedCatalog = buildCatalog(entries: openedArchive.entries)
+        guard !openedCatalog.messageEntriesByFolder.isEmpty else {
             throw ArchiveReaderError.noMessagesFound
         }
 
-        let accounts = catalog.accountAddresses.sorted().map {
+        let accounts = openedCatalog.accountAddresses.sorted().map {
             MailAccount(id: $0, displayName: $0, address: $0)
         }
-        let folders = makeFolders(from: catalog)
-        let parser = OLMMessageParser()
-        var messages: [MessageSummary] = []
+        let folders = makeFolders(from: openedCatalog)
+        let size = Int64(resourceValues.fileSize ?? 0)
+        let openedIndex = try OLMSearchIndex(
+            archiveURL: url,
+            fileSize: size,
+            modifiedAt: resourceValues.contentModificationDate
+        )
 
-        for folder in folders {
-            let entries = catalog.messageEntriesByFolder[folder.id, default: []]
-                .suffix(messageLimitPerFolder)
+        var pathLookup: [String: ZIPEntry] = [:]
+        var folderLookup: [String: MailFolder.ID] = [:]
+        for (folderID, entries) in openedCatalog.messageEntriesByFolder {
             for entry in entries {
-                autoreleasepool {
-                    guard let data = try? archive.data(for: entry, maximumSize: 32 * 1_024 * 1_024),
-                          let message = parser.parse(
-                            data: data,
-                            entryPath: entry.path,
-                            folderID: folder.id
-                          ) else { return }
-                    messages.append(message)
-                }
+                pathLookup[entry.path] = entry
+                folderLookup[entry.path] = folderID
             }
         }
-        messages.sort { $0.sentAt > $1.sentAt }
+
+        stateLock.withLock {
+            archive = openedArchive
+            catalog = openedCatalog
+            entriesByPath = pathLookup
+            folderByEntryPath = folderLookup
+            searchIndex = openedIndex
+        }
 
         return ArchiveSnapshot(
             identity: ArchiveIdentity(
                 url: url,
                 displayName: url.lastPathComponent,
-                size: Int64(resourceValues.fileSize ?? 0),
+                size: size,
                 isPreviewData: false
             ),
             accounts: accounts,
             folders: folders,
-            messages: messages
+            messages: []
         )
+    }
+
+    func loadMessages(in folderID: MailFolder.ID, offset: Int, limit: Int) throws -> MessagePage {
+        let state = stateLock.withLock {
+            (archive, catalog.messageEntriesByFolder[folderID] ?? [])
+        }
+        guard let archive = state.0 else { throw ArchiveReaderError.unreadableArchive }
+        let orderedEntries = Array(state.1.reversed())
+        let start = min(max(0, offset), orderedEntries.count)
+        let end = min(start + max(1, limit), orderedEntries.count)
+        let parser = OLMMessageParser()
+        var messages: [MessageSummary] = []
+
+        for entry in orderedEntries[start..<end] {
+            if let message = parse(entry: entry, folderID: folderID, archive: archive, parser: parser) {
+                messages.append(message)
+            }
+        }
+        messages.sort { $0.sentAt > $1.sentAt }
+        return MessagePage(messages: messages, nextOffset: end, totalCount: orderedEntries.count)
+    }
+
+    func buildSearchIndex(progress: @escaping @Sendable (IndexProgress) -> Void) throws {
+        let state = stateLock.withLock { (archive, catalog, searchIndex) }
+        guard let archive = state.0, let index = state.2 else {
+            throw ArchiveReaderError.unreadableArchive
+        }
+
+        let work = state.1.messageEntriesByFolder.keys.sorted().flatMap { folderID in
+            state.1.messageEntriesByFolder[folderID, default: []].map { (folderID, $0) }
+        }
+        var offset = min(index.nextEntryOffset, work.count)
+        if index.isComplete {
+            progress(IndexProgress(indexed: work.count, total: work.count, isComplete: true))
+            return
+        }
+
+        let parser = OLMMessageParser()
+        let batchSize = 250
+        while offset < work.count {
+            if Task.isCancelled { return }
+            let end = min(offset + batchSize, work.count)
+            try index.beginBatch()
+            do {
+                for position in offset..<end {
+                    let (folderID, entry) = work[position]
+                    if let message = parse(entry: entry, folderID: folderID, archive: archive, parser: parser) {
+                        try index.insert(message, entryPath: entry.path)
+                    }
+                }
+                try index.commitBatch(nextOffset: end, complete: end == work.count)
+            } catch {
+                index.rollbackBatch()
+                throw error
+            }
+            offset = end
+            progress(IndexProgress(indexed: offset, total: work.count, isComplete: offset == work.count))
+        }
+    }
+
+    func searchMessages(matching query: String, limit: Int) throws -> [MessageSummary] {
+        let state = stateLock.withLock { (archive, searchIndex, entriesByPath, folderByEntryPath) }
+        guard let archive = state.0, let index = state.1 else { return [] }
+        let paths = try index.searchPaths(matching: query, limit: limit)
+        let parser = OLMMessageParser()
+        return paths.compactMap { path in
+            guard let entry = state.2[path], let folderID = state.3[path] else { return nil }
+            return parse(entry: entry, folderID: folderID, archive: archive, parser: parser)
+        }
+    }
+
+    private func parse(
+        entry: ZIPEntry,
+        folderID: MailFolder.ID,
+        archive: ZIPArchive,
+        parser: OLMMessageParser
+    ) -> MessageSummary? {
+        autoreleasepool {
+            guard let data = try? archive.data(for: entry, maximumSize: 32 * 1_024 * 1_024) else {
+                return nil
+            }
+            return parser.parse(data: data, entryPath: entry.path, folderID: folderID)
+        }
     }
 
     private func buildCatalog(entries: [ZIPEntry]) -> Catalog {
         var catalog = Catalog()
         let marker = "/com.microsoft.__Messages/"
-
         for entry in entries where entry.path.hasSuffix(".xml") {
             guard entry.path.hasPrefix("Accounts/"),
                   let markerRange = entry.path.range(of: marker),
                   entry.path[markerRange.upperBound...].lastPathComponent.hasPrefix("message_") else {
                 continue
             }
-
             let accountStart = entry.path.index(entry.path.startIndex, offsetBy: "Accounts/".count)
             let account = String(entry.path[accountStart..<markerRange.lowerBound])
             let remainder = String(entry.path[markerRange.upperBound...])
@@ -96,19 +187,17 @@ struct NativeOLMArchiveReader: OLMArchiveReading {
                 let name = components.last ?? path
                 let parentPath = components.dropLast().joined(separator: "/")
                 let id = Self.folderID(account: account, path: path)
-                let count = catalog.messageEntriesByFolder[id, default: []].count
                 result.append(MailFolder(
                     id: id,
                     accountID: account,
                     parentID: parentPath.isEmpty ? nil : Self.folderID(account: account, path: parentPath),
                     name: name,
                     kind: Self.folderKind(name),
-                    messageCount: count,
+                    messageCount: catalog.messageEntriesByFolder[id, default: []].count,
                     unreadCount: 0
                 ))
             }
         }
-
         return result.sorted {
             let leftRank = Self.folderRank($0.kind)
             let rightRank = Self.folderRank($1.kind)
@@ -118,9 +207,7 @@ struct NativeOLMArchiveReader: OLMArchiveReading {
         }
     }
 
-    private static func folderID(account: String, path: String) -> String {
-        "\(account)::\(path)"
-    }
+    private static func folderID(account: String, path: String) -> String { "\(account)::\(path)" }
 
     private static func folderKind(_ name: String) -> FolderKind {
         switch name.lowercased() {
@@ -145,14 +232,20 @@ struct NativeOLMArchiveReader: OLMArchiveReading {
     }
 }
 
-private struct Catalog {
+private struct Catalog: Sendable {
     var accountAddresses: Set<String> = []
     var folderPathsByAccount: [String: Set<String>] = [:]
     var messageEntriesByFolder: [String: [ZIPEntry]] = [:]
 }
 
 private extension String.SubSequence {
-    var lastPathComponent: Substring {
-        split(separator: "/").last ?? self
+    var lastPathComponent: Substring { split(separator: "/").last ?? self }
+}
+
+private extension NSLock {
+    func withLock<T>(_ operation: () throws -> T) rethrows -> T {
+        lock()
+        defer { unlock() }
+        return try operation()
     }
 }

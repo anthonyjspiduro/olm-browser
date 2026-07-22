@@ -127,4 +127,16 @@ struct PreviewArchiveReader: OLMArchiveReading {
             messages: messages
         )
     }
+
+    func loadMessages(in folderID: MailFolder.ID, offset: Int, limit: Int) throws -> MessagePage {
+        MessagePage(messages: [], nextOffset: 0, totalCount: 0)
+    }
+
+    func buildSearchIndex(progress: @escaping @Sendable (IndexProgress) -> Void) throws {
+        progress(IndexProgress(indexed: 0, total: 0, isComplete: true))
+    }
+
+    func searchMessages(matching query: String, limit: Int) throws -> [MessageSummary] {
+        []
+    }
 }

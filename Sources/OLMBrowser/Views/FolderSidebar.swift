@@ -12,9 +12,9 @@ struct FolderSidebar: View {
 
                 ForEach(snapshot.accounts) { account in
                     Section(account.displayName) {
-                        ForEach(snapshot.folders.filter { $0.accountID == account.id }) { folder in
-                            FolderRow(folder: folder)
-                                .tag(folder.id)
+                        OutlineGroup(folderTree(for: account.id), children: \.children) { node in
+                            FolderRow(folder: node.folder)
+                                .tag(node.folder.id)
                         }
                     }
                 }
@@ -22,9 +22,28 @@ struct FolderSidebar: View {
         }
         .listStyle(.sidebar)
         .onChange(of: store.selectedFolderID) {
-            store.selectedMessageID = store.visibleMessages.first?.id
+            store.folderSelectionChanged()
         }
     }
+
+    private func folderTree(for accountID: MailAccount.ID) -> [FolderNode] {
+        guard let folders = store.snapshot?.folders.filter({ $0.accountID == accountID }) else {
+            return []
+        }
+        func children(of parentID: MailFolder.ID?) -> [FolderNode] {
+            folders.filter { $0.parentID == parentID }.map { folder in
+                let nested = children(of: folder.id)
+                return FolderNode(folder: folder, children: nested.isEmpty ? nil : nested)
+            }
+        }
+        return children(of: nil)
+    }
+}
+
+private struct FolderNode: Identifiable {
+    let folder: MailFolder
+    let children: [FolderNode]?
+    var id: MailFolder.ID { folder.id }
 }
 
 private struct ArchiveHeader: View {

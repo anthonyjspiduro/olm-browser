@@ -19,4 +19,7 @@ enum ArchiveReaderError: LocalizedError {
 
 protocol OLMArchiveReading: Sendable {
     func openArchive(at url: URL) throws -> ArchiveSnapshot
+    func loadMessages(in folderID: MailFolder.ID, offset: Int, limit: Int) throws -> MessagePage
+    func buildSearchIndex(progress: @escaping @Sendable (IndexProgress) -> Void) throws
+    func searchMessages(matching query: String, limit: Int) throws -> [MessageSummary]
 }

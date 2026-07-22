@@ -42,11 +42,11 @@ final class OLMSearchIndex: @unchecked Sendable {
         try execute("PRAGMA journal_mode=WAL;")
         try execute("PRAGMA synchronous=NORMAL;")
         try execute("CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);")
-        if metadataValue(for: "schema_version") != "2" {
+        if metadataValue(for: "schema_version") != "3" {
             try execute("DROP TABLE IF EXISTS message_search;")
             try setMetadataValue("0", for: "next_entry_offset")
             try setMetadataValue("0", for: "complete")
-            try setMetadataValue("2", for: "schema_version")
+            try setMetadataValue("3", for: "schema_version")
         }
         try execute("""
             CREATE VIRTUAL TABLE IF NOT EXISTS message_search USING fts5(
@@ -57,6 +57,8 @@ final class OLMSearchIndex: @unchecked Sendable {
                 subject,
                 sender,
                 recipients,
+                cc_recipients,
+                bcc_recipients,
                 preview,
                 body,
                 attachments,
@@ -66,8 +68,8 @@ final class OLMSearchIndex: @unchecked Sendable {
 
         let insertSQL = """
             INSERT INTO message_search
-                (entry_path, folder_id, sent_at, has_attachment, subject, sender, recipients, preview, body, attachments)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                (entry_path, folder_id, sent_at, has_attachment, subject, sender, recipients, cc_recipients, bcc_recipients, preview, body, attachments)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """
         guard sqlite3_prepare_v2(handle, insertSQL, -1, &insertStatement, nil) == SQLITE_OK else {
             throw SearchIndexError.operationFailed(String(cString: sqlite3_errmsg(handle)))
@@ -107,6 +109,8 @@ final class OLMSearchIndex: @unchecked Sendable {
                 message.subject,
                 "\(message.sender.label) \(message.sender.address)",
                 message.recipients.map { "\($0.label) \($0.address)" }.joined(separator: " "),
+                message.ccRecipients.map { "\($0.label) \($0.address)" }.joined(separator: " "),
+                message.bccRecipients.map { "\($0.label) \($0.address)" }.joined(separator: " "),
                 message.preview,
                 message.body,
                 attachmentNames
@@ -182,6 +186,14 @@ final class OLMSearchIndex: @unchecked Sendable {
             if let recipient = parsed.recipient {
                 predicates.append("recipients LIKE ? ESCAPE '\\' COLLATE NOCASE")
                 bindings.append("%\(Self.likePattern(recipient))%")
+            }
+            if let ccRecipient = parsed.ccRecipient {
+                predicates.append("cc_recipients LIKE ? ESCAPE '\\' COLLATE NOCASE")
+                bindings.append("%\(Self.likePattern(ccRecipient))%")
+            }
+            if let bccRecipient = parsed.bccRecipient {
+                predicates.append("bcc_recipients LIKE ? ESCAPE '\\' COLLATE NOCASE")
+                bindings.append("%\(Self.likePattern(bccRecipient))%")
             }
             if let scopedFolder = folderID {
                 predicates.append("folder_id = ?")
@@ -324,6 +336,8 @@ private struct SearchTerms {
     var terms: [String] = []
     var sender: String?
     var recipient: String?
+    var ccRecipient: String?
+    var bccRecipient: String?
     var folder: String?
     var after: Date?
     var before: Date?
@@ -338,6 +352,8 @@ private struct SearchTerms {
             switch key {
             case "from" where !value.isEmpty: sender = value
             case "to" where !value.isEmpty: recipient = value
+            case "cc" where !value.isEmpty: ccRecipient = value
+            case "bcc" where !value.isEmpty: bccRecipient = value
             case "folder" where !value.isEmpty: folder = value
             case "after": after = Self.date(value)
             case "before": before = Self.date(value)

@@ -47,6 +47,8 @@ private final class NativeOLMArchiveReaderCheck {
             throw CheckFailure("Paging returned duplicate or incorrect offsets")
         }
         print("HTML messages in paging sample: \(combined.filter { $0.htmlBody != nil }.count)")
+        print("Messages with CC in paging sample: \(combined.filter { !$0.ccRecipients.isEmpty }.count)")
+        print("Messages with BCC in paging sample: \(combined.filter { !$0.bccRecipients.isEmpty }.count)")
         let attachments = combined.flatMap(\.attachments)
         let available = attachments.filter(\.isAvailable)
         let missing = attachments.filter { $0.diagnostic == .missingPayload }.count

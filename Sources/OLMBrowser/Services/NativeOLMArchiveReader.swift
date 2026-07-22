@@ -261,7 +261,9 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
         }
         return MessageSummary(
             id: message.id, folderID: message.folderID, subject: message.subject,
-            sender: message.sender, recipients: message.recipients, sentAt: message.sentAt,
+            sender: message.sender, recipients: message.recipients,
+            ccRecipients: message.ccRecipients, bccRecipients: message.bccRecipients,
+            sentAt: message.sentAt,
             preview: message.preview, body: message.body, htmlBody: message.htmlBody,
             isRead: message.isRead, isFlagged: message.isFlagged, attachments: resolved
         )

@@ -24,7 +24,7 @@ The reader has been validated against a 26 GB OLM containing 83,172 messages acr
 - Expandable nested folder hierarchy
 - Folder message counts
 - Incremental 100-message paging while scrolling
-- Sender, recipient, subject, sent date, preview, body, read state, and flag display
+- Sender, To, CC, BCC, subject, sent date, preview, body, read state, and flag display
 - Attachment filename, content type, and size display
 - Attachment payload resolution through each message's archive reference
 - Quick Look attachment preview, Save As, drag-to-Finder, and export-all
@@ -50,7 +50,7 @@ The reader has been validated against a 26 GB OLM containing 83,172 messages acr
 - Resumable 250-entry index transactions
 - Visible search-index progress
 - Disposable, archive-fingerprinted indexes in the macOS user cache
-- Structured `from:`, `to:`, `folder:`, `after:`, `before:`, and `has:attachment` filters
+- Structured `from:`, `to:`, `cc:`, `bcc:`, `folder:`, `after:`, `before:`, and `has:attachment` filters
 - 100-result search paging without a 500-result ceiling
 - Optional folder-scoped search and relevance/newest/oldest sorting
 - Cancelable archive opening and indexing
@@ -96,7 +96,7 @@ swiftc Sources/OLMBrowser/Models/ArchiveModels.swift \
 
 Full-text indexing begins after the archive folder catalog opens. Messages remain browsable while indexing runs. The index commits every 250 entries and records its next position in the same transaction, allowing interrupted indexing to resume safely.
 
-Search results may be incomplete until the progress indicator finishes. Queries accept free text plus `from:`, `to:`, `folder:`, `after:YYYY-MM-DD`, `before:YYYY-MM-DD`, and `has:attachment`. Quote filter values containing spaces. Derived search data can be rebuilt or deleted and compacted without affecting the source OLM.
+Search results may be incomplete until the progress indicator finishes. Queries accept free text plus `from:`, `to:`, `cc:`, `bcc:`, `folder:`, `after:YYYY-MM-DD`, `before:YYYY-MM-DD`, and `has:attachment`. Quote filter values containing spaces. Derived search data can be rebuilt or deleted and compacted without affecting the source OLM.
 
 Search results load in 100-message pages. The message-list controls can restrict a query to the selected folder and sort by relevance, newest date, or oldest date.
 
@@ -121,8 +121,6 @@ Search results load in 100-message pages. The message-list controls can restrict
 ## Known limitations
 
 - HTML links are displayed but navigation is intentionally blocked.
-- `cc:` and `bcc:` structured search are not implemented yet.
-- CC and BCC fields are not displayed yet.
 - Folder unread totals are not fully calculated.
 - The packaged build is Apple Silicon only and ad-hoc signed, not notarized.
 - Calendar and contact records are not browsable yet.
@@ -130,7 +128,7 @@ Search results load in 100-message pages. The message-list controls can restrict
 
 ## Planned features
 
-1. Add `cc:`/`bcc:` search, CC/BCC display, richer headers, unread totals, and globally accurate chronological folder paging.
+1. Add richer message headers, accurate unread totals, and globally chronological folder paging.
 2. Add explicit external-link opening with a confirmation boundary.
 3. Add PDF/CSV and batch message export plus exportable diagnostic reports.
 4. Add CRC verification, unsupported-compression reporting, and more granular malformed-XML recovery.

@@ -34,13 +34,20 @@ enum ArchiveSearchSmokeCheck {
         let syntheticDate = try reader.searchMessages(
             matching: "after:2999-01-01", folderID: nil, offset: 0, limit: 10, sort: .newest
         )
-        guard syntheticSender.totalCount == 0, syntheticDate.totalCount == 0 else {
+        let syntheticCC = try reader.searchMessages(
+            matching: "cc:no-such-synthetic-address@example.invalid", folderID: nil, offset: 0, limit: 10, sort: .relevance
+        )
+        let syntheticBCC = try reader.searchMessages(
+            matching: "bcc:no-such-synthetic-address@example.invalid", folderID: nil, offset: 0, limit: 10, sort: .relevance
+        )
+        guard syntheticSender.totalCount == 0, syntheticDate.totalCount == 0,
+              syntheticCC.totalCount == 0, syntheticBCC.totalCount == 0 else {
             throw Failure("Synthetic negative filters unexpectedly matched")
         }
         print("Indexed messages: \(finalProgress.indexed)")
         print("Unreadable messages: \(finalProgress.failed)")
         print("Messages with attachments: \(first.totalCount)")
-        print("Structured filter, folder scope, sorting, and search paging checks passed")
+        print("Structured filters including CC/BCC, folder scope, sorting, and search paging checks passed")
     }
 }
 

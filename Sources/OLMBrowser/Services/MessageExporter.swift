@@ -29,6 +29,8 @@ enum MessageExporter {
         Subject: \(message.subject)
         From: \(participant(message.sender))
         To: \(message.recipients.map(participant).joined(separator: ", "))
+        CC: \(message.ccRecipients.map(participant).joined(separator: ", "))
+        BCC: \(message.bccRecipients.map(participant).joined(separator: ", "))
         Date: \(message.sentAt.formatted(date: .long, time: .complete))
 
         \(message.body)
@@ -42,6 +44,8 @@ enum MessageExporter {
             "subject": message.subject,
             "from": ["name": message.sender.name, "address": message.sender.address],
             "to": message.recipients.map { ["name": $0.name, "address": $0.address] },
+            "cc": message.ccRecipients.map { ["name": $0.name, "address": $0.address] },
+            "bcc": message.bccRecipients.map { ["name": $0.name, "address": $0.address] },
             "sentAt": ISO8601DateFormatter().string(from: message.sentAt),
             "body": message.body,
             "htmlBody": message.htmlBody ?? NSNull(),
@@ -59,6 +63,12 @@ enum MessageExporter {
         var output = "Date: \(rfc822Date(message.sentAt))\r\n"
         output += "From: \(header(participant(message.sender)))\r\n"
         output += "To: \(header(message.recipients.map(participant).joined(separator: ", ")))\r\n"
+        if !message.ccRecipients.isEmpty {
+            output += "Cc: \(header(message.ccRecipients.map(participant).joined(separator: ", ")))\r\n"
+        }
+        if !message.bccRecipients.isEmpty {
+            output += "Bcc: \(header(message.bccRecipients.map(participant).joined(separator: ", ")))\r\n"
+        }
         output += "Subject: \(encodedHeader(message.subject))\r\n"
         output += "MIME-Version: 1.0\r\n"
         output += "Content-Type: multipart/mixed; boundary=\"\(boundary)\"\r\n\r\n"
@@ -85,7 +95,7 @@ enum MessageExporter {
     }
 
     private static func participant(_ value: MailParticipant) -> String {
-        value.name.isEmpty ? value.address : "\(value.name) <\(value.address)>"
+        value.displayLabel
     }
 
     private static func header(_ value: String) -> String {

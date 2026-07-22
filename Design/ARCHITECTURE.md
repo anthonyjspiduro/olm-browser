@@ -45,7 +45,7 @@ The OLM parser turns Outlook XML into normalized accounts, folders, messages, co
 
 ### Indexing
 
-SQLite stores normalized metadata and indexing checkpoints. FTS5 stores searchable subject, participant, preview, body, and attachment-name text. Index construction is incremental, cancellable, resumable, and lower priority than interactive browsing.
+SQLite stores normalized metadata and indexing checkpoints. FTS5 stores searchable subject, sender, To, CC, BCC, preview, body, and attachment-name text. Index construction is incremental, cancellable, resumable, and lower priority than interactive browsing.
 
 The implemented index commits every 250 entries and records the next central-directory offset in the same transaction. Search is available while indexing continues and becomes complete when the final batch commits. Cache filenames use a stable fingerprint of the archive path, size, and modification date.
 
@@ -75,13 +75,13 @@ Previewing creates a UUID-isolated temporary file and invokes Quick Look. Drag-t
 
 ### Search query path
 
-The index schema stores folder ID, sent timestamp, and attachment presence as unindexed FTS columns beside searchable text. A versioned schema migration discards the older derived index and resumes in 250-message transactions. Filter values are bound SQLite parameters; free terms alone become an escaped FTS expression. Results are counted and returned in 100-message pages with relevance or date ordering.
+The index schema stores folder ID, sent timestamp, and attachment presence as unindexed FTS columns beside separate searchable sender, To, CC, and BCC fields. Schema version 3 discards only an older derived FTS table, resets its checkpoint, and resumes in 250-message transactions. Structured `from:`, `to:`, `cc:`, `bcc:`, `folder:`, date, and attachment filter values are bound SQLite parameters; free terms alone become an escaped FTS expression. Results are counted and returned in 100-message pages with relevance or date ordering.
 
 ### Operations and export
 
 Archive opening and indexing run in cancelable tasks. The operations panel reports central-directory, message, attachment, duplicate-path, unreadable-message, index-progress, and cache-size counts. Rebuild clears the checkpoint and resumes indexing; Delete Cache removes indexed rows and compacts the disposable database.
 
-Message export is explicit and local. Plain-text and JSON exports include normalized message fields. RFC 822 `.eml` export creates multipart plain/HTML content and includes only resolved, size-bounded attachments.
+Message export is explicit and local. Plain-text and JSON exports include normalized sender, To, CC, and BCC fields. RFC 822 `.eml` export preserves those participant headers, creates multipart plain/HTML content, and includes only resolved, size-bounded attachments.
 
 ### AI boundary
 

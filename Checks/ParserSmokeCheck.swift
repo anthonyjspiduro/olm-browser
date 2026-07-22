@@ -11,6 +11,12 @@ enum ParserSmokeCheck {
           <OPFMessageCopyToAddresses>
             <emailAddress OPFContactEmailAddressAddress="archive@example.com" OPFContactEmailAddressName="Archive Account" />
           </OPFMessageCopyToAddresses>
+          <OPFMessageCopyCCAddresses>
+            <emailAddress OPFContactEmailAddressAddress="cc@example.invalid" OPFContactEmailAddressName="Copied Person" />
+          </OPFMessageCopyCCAddresses>
+          <OPFMessageCopyBCCAddresses>
+            <emailAddress OPFContactEmailAddressAddress="bcc@example.invalid" OPFContactEmailAddressName="Hidden Person" />
+          </OPFMessageCopyBCCAddresses>
           <OPFMessageCopySubject>Project update</OPFMessageCopySubject>
           <OPFMessageCopyBody>The schedule is attached.</OPFMessageCopyBody>
           <OPFMessageCopyHTMLBody>&lt;p&gt;The &lt;strong&gt;schedule&lt;/strong&gt; is attached.&lt;/p&gt;</OPFMessageCopyHTMLBody>
@@ -42,6 +48,8 @@ enum ParserSmokeCheck {
         try require(message.subject == "Project update", "subject")
         try require(message.sender.address == "jordan@example.com", "sender")
         try require(message.recipients.map(\.address) == ["archive@example.com"], "recipients")
+        try require(message.ccRecipients.map(\.address) == ["cc@example.invalid"], "CC recipients")
+        try require(message.bccRecipients.map(\.address) == ["bcc@example.invalid"], "BCC recipients")
         try require(message.body == "The schedule is attached.", "body")
         try require(message.htmlBody?.contains("<strong>") == true, "HTML body")
         try require(!message.isRead, "read state")

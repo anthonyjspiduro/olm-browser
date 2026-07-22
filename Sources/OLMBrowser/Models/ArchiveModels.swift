@@ -53,6 +53,12 @@ struct MailParticipant: Identifiable, Hashable, Sendable {
     let address: String
 
     var label: String { name.isEmpty ? address : name }
+
+    var displayLabel: String {
+        if name.isEmpty { return address }
+        if address.isEmpty { return name }
+        return "\(name) <\(address)>"
+    }
 }
 
 enum AttachmentDiagnostic: Hashable, Sendable {
@@ -111,6 +117,8 @@ struct MessageSummary: Identifiable, Hashable, Sendable {
     let subject: String
     let sender: MailParticipant
     let recipients: [MailParticipant]
+    let ccRecipients: [MailParticipant]
+    let bccRecipients: [MailParticipant]
     let sentAt: Date
     let preview: String
     let body: String

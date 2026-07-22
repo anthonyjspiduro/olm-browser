@@ -176,8 +176,21 @@ private struct MessageHeader: View {
                 GridRow {
                     Text("To")
                         .foregroundStyle(.secondary)
-                    Text(message.recipients.map(\.label).joined(separator: ", "))
-                        .textSelection(.enabled)
+                    ParticipantListText(participants: message.recipients)
+                }
+                if !message.ccRecipients.isEmpty {
+                    GridRow {
+                        Text("CC")
+                            .foregroundStyle(.secondary)
+                        ParticipantListText(participants: message.ccRecipients)
+                    }
+                }
+                if !message.bccRecipients.isEmpty {
+                    GridRow {
+                        Text("BCC")
+                            .foregroundStyle(.secondary)
+                        ParticipantListText(participants: message.bccRecipients)
+                    }
                 }
                 GridRow {
                     Text("Date")
@@ -195,7 +208,16 @@ private struct ParticipantText: View {
     let participant: MailParticipant
 
     var body: some View {
-        Text("\(participant.label) <\(participant.address)>")
+        Text(participant.displayLabel)
+            .textSelection(.enabled)
+    }
+}
+
+private struct ParticipantListText: View {
+    let participants: [MailParticipant]
+
+    var body: some View {
+        Text(participants.map(\.displayLabel).joined(separator: ", "))
             .textSelection(.enabled)
     }
 }

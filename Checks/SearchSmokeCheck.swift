@@ -13,6 +13,8 @@ enum SearchSmokeCheck {
             subject: "Quarterly lighthouse project",
             sender: sender,
             recipients: [],
+            ccRecipients: [MailParticipant(name: "Casey Copy", address: "cc@example.invalid")],
+            bccRecipients: [MailParticipant(name: "Blake Hidden", address: "bcc@example.invalid")],
             sentAt: Date(),
             preview: "Budget review",
             body: "The approved lighthouse budget is ready.",
@@ -31,6 +33,13 @@ enum SearchSmokeCheck {
         )
         guard results.paths == ["message_1.xml"], results.totalCount == 1 else {
             throw CheckFailure("FTS5 did not return the indexed message")
+        }
+        let copied = try index.searchPaths(
+            matching: "cc:cc@example.invalid bcc:bcc@example.invalid",
+            folderID: nil, offset: 0, limit: 10, sort: .relevance
+        )
+        guard copied.paths == ["message_1.xml"], copied.totalCount == 1 else {
+            throw CheckFailure("CC/BCC filters did not return the indexed message")
         }
         let filtered = try index.searchPaths(
             matching: "has:attachment", folderID: nil, offset: 0, limit: 10, sort: .newest

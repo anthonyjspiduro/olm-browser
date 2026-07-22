@@ -12,6 +12,8 @@ final class OLMMessageParser: NSObject, XMLParserDelegate {
     private var receivedDateText = ""
     private var sender: MailParticipant?
     private var recipients: [MailParticipant] = []
+    private var ccRecipients: [MailParticipant] = []
+    private var bccRecipients: [MailParticipant] = []
     private var isRead = true
     private var isFlagged = false
     private var attachments: [AttachmentSummary] = []
@@ -38,6 +40,8 @@ final class OLMMessageParser: NSObject, XMLParserDelegate {
             subject: subject.isEmpty ? "(No Subject)" : subject,
             sender: resolvedSender,
             recipients: recipients,
+            ccRecipients: ccRecipients,
+            bccRecipients: bccRecipients,
             sentAt: resolvedDate,
             preview: resolvedPreview,
             body: resolvedBody,
@@ -68,6 +72,10 @@ final class OLMMessageParser: NSObject, XMLParserDelegate {
                 sender = participant
             } else if container == "OPFMessageCopyToAddresses" {
                 recipients.append(participant)
+            } else if container == "OPFMessageCopyCCAddresses" {
+                ccRecipients.append(participant)
+            } else if container == "OPFMessageCopyBCCAddresses" {
+                bccRecipients.append(participant)
             } else if container == "OPFMessageCopyFromAddresses", sender == nil {
                 sender = participant
             }
@@ -127,6 +135,8 @@ final class OLMMessageParser: NSObject, XMLParserDelegate {
         receivedDateText = ""
         sender = nil
         recipients = []
+        ccRecipients = []
+        bccRecipients = []
         isRead = true
         isFlagged = false
         attachments = []

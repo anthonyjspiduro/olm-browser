@@ -11,6 +11,8 @@ enum ExportSmokeCheck {
             id: "m1", folderID: "account::Inbox", subject: "Synthetic subject",
             sender: MailParticipant(name: "Sender", address: "sender@example.invalid"),
             recipients: [MailParticipant(name: "Recipient", address: "recipient@example.invalid")],
+            ccRecipients: [MailParticipant(name: "Copied", address: "cc@example.invalid")],
+            bccRecipients: [MailParticipant(name: "Hidden", address: "bcc@example.invalid")],
             sentAt: Date(timeIntervalSince1970: 1_700_000_000), preview: "Synthetic preview",
             body: "Synthetic body", htmlBody: "<p>Synthetic body</p>", isRead: true,
             isFlagged: false, attachments: [attachment]
@@ -23,6 +25,9 @@ enum ExportSmokeCheck {
         let jsonObject = try JSONSerialization.jsonObject(with: json)
         try require(jsonObject is [String: Any], "JSON export")
         try require(String(data: eml, encoding: .utf8)?.contains("multipart/mixed") == true, "EML export")
+        try require(String(data: text, encoding: .utf8)?.contains("CC: Copied <cc@example.invalid>") == true, "text CC export")
+        try require((jsonObject as? [String: Any])?["bcc"] is [[String: String]], "JSON BCC export")
+        try require(String(data: eml, encoding: .utf8)?.contains("Bcc: Hidden <bcc@example.invalid>") == true, "EML BCC export")
         try require(AttachmentFileStore.safeFilename(attachment.filename) == "unsafe-name.txt", "safe filename")
         print("Message and attachment export smoke check passed")
     }

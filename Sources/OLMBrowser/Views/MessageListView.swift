@@ -1,0 +1,89 @@
+import SwiftUI
+
+struct MessageListView: View {
+    @EnvironmentObject private var store: ArchiveStore
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(store.selectedFolder?.name ?? "All Messages")
+                        .font(.headline)
+                    Text(resultLabel)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+
+            Divider()
+
+            if store.visibleMessages.isEmpty {
+                ContentUnavailableView.search(text: store.searchText)
+            } else {
+                List(store.visibleMessages, selection: $store.selectedMessageID) { message in
+                    MessageRow(message: message)
+                        .tag(message.id)
+                }
+                .listStyle(.inset)
+            }
+        }
+    }
+
+    private var resultLabel: String {
+        let count = store.visibleMessages.count
+        if store.snapshot?.identity.isPreviewData == true {
+            return "\(count) preview \(count == 1 ? "message" : "messages")"
+        }
+        if store.searchText.isEmpty,
+           let total = store.selectedFolder?.messageCount,
+           total > count {
+            return "Showing \(count.formatted()) of \(total.formatted())"
+        }
+        return "\(count) \(count == 1 ? "message" : "messages")"
+    }
+}
+
+private struct MessageRow: View {
+    let message: MessageSummary
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(alignment: .firstTextBaseline) {
+                Circle()
+                    .fill(message.isRead ? Color.clear : Color.accentColor)
+                    .frame(width: 7, height: 7)
+                Text(message.sender.label)
+                    .fontWeight(message.isRead ? .regular : .semibold)
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                Text(message.sentAt, format: .dateTime.month(.abbreviated).day())
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack(spacing: 6) {
+                Text(message.subject)
+                    .fontWeight(message.isRead ? .regular : .semibold)
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                if message.isFlagged {
+                    Image(systemName: "flag.fill")
+                        .foregroundStyle(.orange)
+                }
+                if !message.attachments.isEmpty {
+                    Image(systemName: "paperclip")
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Text(message.preview)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+        }
+        .padding(.vertical, 6)
+    }
+}

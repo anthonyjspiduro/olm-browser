@@ -1,0 +1,153 @@
+import Foundation
+
+final class OLMMessageParser: NSObject, XMLParserDelegate {
+    private var elements: [String] = []
+    private var text = ""
+    private var subject = ""
+    private var body = ""
+    private var preview = ""
+    private var messageID = ""
+    private var sentDateText = ""
+    private var receivedDateText = ""
+    private var sender: MailParticipant?
+    private var recipients: [MailParticipant] = []
+    private var isRead = true
+    private var isFlagged = false
+    private var attachments: [AttachmentSummary] = []
+
+    func parse(data: Data, entryPath: String, folderID: String) -> MessageSummary? {
+        reset()
+        let parser = XMLParser(data: data)
+        parser.delegate = self
+        parser.shouldResolveExternalEntities = false
+        guard parser.parse() else { return nil }
+
+        let resolvedSender = sender ?? MailParticipant(name: "Unknown Sender", address: "")
+        let resolvedDate = Self.parseDate(sentDateText)
+            ?? Self.parseDate(receivedDateText)
+            ?? .distantPast
+        let resolvedBody = body.isEmpty ? preview : body
+        let resolvedPreview = preview.isEmpty
+            ? String(resolvedBody.prefix(240)).replacingOccurrences(of: "\n", with: " ")
+            : preview
+
+        return MessageSummary(
+            id: messageID.isEmpty ? entryPath : messageID,
+            folderID: folderID,
+            subject: subject.isEmpty ? "(No Subject)" : subject,
+            sender: resolvedSender,
+            recipients: recipients,
+            sentAt: resolvedDate,
+            preview: resolvedPreview,
+            body: resolvedBody,
+            isRead: isRead,
+            isFlagged: isFlagged,
+            attachments: attachments
+        )
+    }
+
+    func parser(
+        _ parser: XMLParser,
+        didStartElement elementName: String,
+        namespaceURI: String?,
+        qualifiedName qName: String?,
+        attributes attributeDict: [String: String] = [:]
+    ) {
+        elements.append(elementName)
+        text = ""
+
+        if elementName == "emailAddress" {
+            let participant = MailParticipant(
+                name: attributeDict["OPFContactEmailAddressName"] ?? "",
+                address: attributeDict["OPFContactEmailAddressAddress"] ?? ""
+            )
+            let container = elements.dropLast().last ?? ""
+            if container == "OPFMessageCopySenderAddress" {
+                sender = participant
+            } else if container == "OPFMessageCopyToAddresses" {
+                recipients.append(participant)
+            } else if container == "OPFMessageCopyFromAddresses", sender == nil {
+                sender = participant
+            }
+        } else if elementName == "messageAttachment" {
+            let index = attachments.count
+            let size = Int64(attributeDict["OPFAttachmentContentFileSize"] ?? "") ?? 0
+            let filename = attributeDict["OPFAttachmentName"]
+                ?? attributeDict["OPFAttachmentContentID"]
+                ?? "Attachment \(index + 1)"
+            attachments.append(AttachmentSummary(
+                id: "\(index)-\(filename)",
+                filename: filename,
+                byteCount: size,
+                contentType: attributeDict["OPFAttachmentContentType"] ?? "application/octet-stream"
+            ))
+        }
+    }
+
+    func parser(_ parser: XMLParser, foundCharacters string: String) {
+        text += string
+    }
+
+    func parser(
+        _ parser: XMLParser,
+        didEndElement elementName: String,
+        namespaceURI: String?,
+        qualifiedName qName: String?
+    ) {
+        switch elementName {
+        case "OPFMessageCopySubject": subject = text
+        case "OPFMessageCopyBody": body = text
+        case "OPFMessageCopyPreview": preview = text
+        case "OPFMessageCopyMessageID": messageID = text
+        case "OPFMessageCopySentTime": sentDateText = text
+        case "OPFMessageCopyReceivedTime": receivedDateText = text
+        case "OPFMessageGetIsRead": isRead = Self.parseBoolean(text, defaultValue: true)
+        case "OPFMessageCopyGetFlagStatus":
+            isFlagged = !["", "0", "none", "false"].contains(text.lowercased())
+        default: break
+        }
+        if elements.last == elementName { elements.removeLast() }
+        text = ""
+    }
+
+    private func reset() {
+        elements = []
+        text = ""
+        subject = ""
+        body = ""
+        preview = ""
+        messageID = ""
+        sentDateText = ""
+        receivedDateText = ""
+        sender = nil
+        recipients = []
+        isRead = true
+        isFlagged = false
+        attachments = []
+    }
+
+    private static func parseBoolean(_ value: String, defaultValue: Bool) -> Bool {
+        switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "1", "true", "yes": true
+        case "0", "false", "no": false
+        default: defaultValue
+        }
+    }
+
+    private static func parseDate(_ value: String) -> Date? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let fractionalFormatter = ISO8601DateFormatter()
+        fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let standardFormatter = ISO8601DateFormatter()
+        if let date = fractionalFormatter.date(from: trimmed)
+            ?? standardFormatter.date(from: trimmed) {
+            return date
+        }
+        let legacyFormatter = DateFormatter()
+        legacyFormatter.locale = Locale(identifier: "en_US_POSIX")
+        legacyFormatter.timeZone = TimeZone(secondsFromGMT: 0)
+        legacyFormatter.dateFormat = "yyyy-MM-dd HH:mm:ss Z"
+        return legacyFormatter.date(from: trimmed)
+    }
+}

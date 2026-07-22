@@ -1,0 +1,5 @@
+module CZipSupport {
+    header "CZipSupport.h"
+    link "z"
+    export *
+}

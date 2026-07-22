@@ -47,6 +47,106 @@ struct MailFolder: Identifiable, Hashable, Sendable {
     let unreadCount: Int
 }
 
+enum ArchiveItemKind: String, Hashable, Sendable {
+    case contacts
+    case calendar
+}
+
+struct ArchiveItemSource: Identifiable, Hashable, Sendable {
+    let id: String
+    let accountID: String?
+    let name: String
+    let kind: ArchiveItemKind
+    let entryPath: String
+}
+
+struct ContactEmailAddress: Identifiable, Hashable, Sendable {
+    var id: String { "\(label)|\(address)" }
+    let label: String
+    let address: String
+}
+
+struct ContactPhoneNumber: Identifiable, Hashable, Sendable {
+    var id: String { "\(label)|\(number)" }
+    let label: String
+    let number: String
+}
+
+struct ContactRecord: Identifiable, Hashable, Sendable {
+    let id: String
+    let sourceID: ArchiveItemSource.ID
+    let displayName: String
+    let firstName: String
+    let middleName: String
+    let lastName: String
+    let company: String
+    let jobTitle: String
+    let emails: [ContactEmailAddress]
+    let phoneNumbers: [ContactPhoneNumber]
+    let notes: String
+    let modifiedAt: Date?
+
+    var searchText: String {
+        ([displayName, firstName, middleName, lastName, company, jobTitle, notes]
+            + emails.flatMap { [$0.label, $0.address] }
+            + phoneNumbers.flatMap { [$0.label, $0.number] })
+            .joined(separator: " ")
+    }
+}
+
+struct CalendarAttendee: Identifiable, Hashable, Sendable {
+    var id: String { "\(name)|\(address)|\(type)" }
+    let name: String
+    let address: String
+    let type: String
+    let status: String
+    let responseRequested: Bool
+}
+
+struct CalendarRecurrence: Hashable, Sendable {
+    let frequency: String
+    let interval: Int
+    let occurrenceCount: Int?
+    let endDate: Date?
+}
+
+struct CalendarEventRecord: Identifiable, Hashable, Sendable {
+    let id: String
+    let sourceID: ArchiveItemSource.ID
+    let title: String
+    let startAt: Date
+    let endAt: Date
+    let location: String
+    let details: String
+    let organizer: String
+    let attendees: [CalendarAttendee]
+    let isAllDay: Bool
+    let isPrivate: Bool
+    let hasReminder: Bool
+    let reminderMinutes: Int?
+    let recurrence: CalendarRecurrence?
+
+    var searchText: String {
+        ([title, location, details, organizer]
+            + attendees.flatMap { [$0.name, $0.address] })
+            .joined(separator: " ")
+    }
+}
+
+struct ContactPage: Sendable {
+    let records: [ContactRecord]
+    let nextOffset: Int
+    let totalCount: Int
+    var hasMore: Bool { nextOffset < totalCount }
+}
+
+struct CalendarEventPage: Sendable {
+    let records: [CalendarEventRecord]
+    let nextOffset: Int
+    let totalCount: Int
+    var hasMore: Bool { nextOffset < totalCount }
+}
+
 struct MailParticipant: Identifiable, Hashable, Sendable {
     var id: String { "\(name)|\(address)" }
     let name: String
@@ -178,6 +278,8 @@ struct ArchiveSnapshot: Sendable {
     let identity: ArchiveIdentity
     let accounts: [MailAccount]
     let folders: [MailFolder]
+    let contactSources: [ArchiveItemSource]
+    let calendarSources: [ArchiveItemSource]
     let messages: [MessageSummary]
 }
 

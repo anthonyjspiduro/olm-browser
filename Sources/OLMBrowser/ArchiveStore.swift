@@ -2,6 +2,17 @@ import AppKit
 import Foundation
 import UniformTypeIdentifiers
 
+enum BrowserMode: String, CaseIterable, Identifiable {
+    case mail
+    case contacts
+    case calendar
+    var id: String { rawValue }
+    var label: String { rawValue.capitalized }
+    var symbolName: String {
+        switch self { case .mail: "envelope"; case .contacts: "person.crop.circle"; case .calendar: "calendar" }
+    }
+}
+
 @MainActor
 final class ArchiveStore: ObservableObject {
     @Published private(set) var snapshot: ArchiveSnapshot?
@@ -22,6 +33,16 @@ final class ArchiveStore: ObservableObject {
     @Published private(set) var operationalStatus: ArchiveOperationalStatus?
     @Published private(set) var unreadCountsAreAccurate = false
     @Published private(set) var isLoadingMessageDetail = false
+    @Published var browserMode: BrowserMode = .mail
+    @Published var selectedContactSourceID: ArchiveItemSource.ID?
+    @Published var selectedCalendarSourceID: ArchiveItemSource.ID?
+    @Published var selectedContactIDs: Set<ContactRecord.ID> = []
+    @Published var selectedCalendarEventIDs: Set<CalendarEventRecord.ID> = []
+    @Published private(set) var contacts: [ContactRecord] = []
+    @Published private(set) var calendarEvents: [CalendarEventRecord] = []
+    @Published private(set) var isLoadingItems = false
+    @Published private(set) var itemResultTotal = 0
+    @Published private(set) var isExportingItems = false
 
     private let reader: any OLMArchiveReading
     private let pageSize = 100
@@ -35,6 +56,8 @@ final class ArchiveStore: ObservableObject {
     private var inlineImageTask: Task<Void, Never>?
     private var messageDetailTask: Task<Void, Never>?
     private let attachmentFiles = AttachmentFileStore()
+    private var itemLoadTask: Task<Void, Never>?
+    private var nextItemOffset = 0
 
     init(reader: any OLMArchiveReading = NativeOLMArchiveReader()) {
         self.reader = reader
@@ -53,6 +76,12 @@ final class ArchiveStore: ObservableObject {
     var selectedMessage: MessageSummary? {
         visibleMessages.first { $0.id == selectedMessageID }
     }
+
+    var selectedContacts: [ContactRecord] { contacts.filter { selectedContactIDs.contains($0.id) } }
+    var selectedCalendarEvents: [CalendarEventRecord] { calendarEvents.filter { selectedCalendarEventIDs.contains($0.id) } }
+    var selectedContact: ContactRecord? { selectedContacts.count == 1 ? selectedContacts[0] : nil }
+    var selectedCalendarEvent: CalendarEventRecord? { selectedCalendarEvents.count == 1 ? selectedCalendarEvents[0] : nil }
+    var hasMoreItems: Bool { nextItemOffset < itemResultTotal }
 
     var hasMoreMessages: Bool {
         searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -74,6 +103,11 @@ final class ArchiveStore: ObservableObject {
 
     func open(_ url: URL) {
         guard !isOpening else { return }
+        searchTask?.cancel()
+        indexTask?.cancel()
+        inlineImageTask?.cancel()
+        messageDetailTask?.cancel()
+        itemLoadTask?.cancel()
         isOpening = true
         errorMessage = nil
         let reader = reader
@@ -91,11 +125,17 @@ final class ArchiveStore: ObservableObject {
                 archiveSessionID = UUID()
                 unreadCountsAreAccurate = false
                 snapshot = loaded
+                browserMode = loaded.folders.isEmpty
+                    ? (loaded.contactSources.isEmpty ? .calendar : .contacts)
+                    : .mail
                 searchText = ""
                 selectedFolderID = loaded.folders.first(where: { $0.kind == .inbox })?.id
                     ?? loaded.folders.first?.id
+                selectedContactSourceID = loaded.contactSources.first?.id
+                selectedCalendarSourceID = loaded.calendarSources.first?.id
+                resetItemState()
                 resetPageState()
-                loadNextPage()
+                if browserMode == .mail { loadNextPage() } else { loadNextItems() }
                 startIndexing()
             } catch {
                 if !Task.isCancelled { errorMessage = error.localizedDescription }
@@ -163,6 +203,10 @@ final class ArchiveStore: ObservableObject {
     }
 
     func searchTextChanged() {
+        guard browserMode == .mail else {
+            scheduleItemReload()
+            return
+        }
         searchTask?.cancel()
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else {
@@ -266,14 +310,18 @@ final class ArchiveStore: ObservableObject {
         indexTask?.cancel()
         inlineImageTask?.cancel()
         messageDetailTask?.cancel()
+        itemLoadTask?.cancel()
         snapshot = nil
         unreadCountsAreAccurate = false
         archiveSessionID = UUID()
         selectedFolderID = nil
+        selectedContactSourceID = nil
+        selectedCalendarSourceID = nil
         selectedMessageID = nil
         searchText = ""
         messages = []
         searchResults = []
+        resetItemState()
         resetPageState()
         attachmentFiles.cleanupSession()
     }
@@ -284,6 +332,7 @@ final class ArchiveStore: ObservableObject {
         indexTask?.cancel()
         inlineImageTask?.cancel()
         messageDetailTask?.cancel()
+        itemLoadTask?.cancel()
         attachmentFiles.cleanupSession()
     }
 
@@ -546,6 +595,147 @@ final class ArchiveStore: ObservableObject {
         return provider
     }
 
+    func browserModeChanged() {
+        searchTask?.cancel()
+        itemLoadTask?.cancel()
+        searchText = ""
+        if browserMode == .contacts, selectedContactSourceID == nil {
+            selectedContactSourceID = snapshot?.contactSources.first?.id
+        } else if browserMode == .calendar, selectedCalendarSourceID == nil {
+            selectedCalendarSourceID = snapshot?.calendarSources.first?.id
+        }
+        resetItemState()
+        if browserMode != .mail { loadNextItems() }
+    }
+
+    func itemSourceSelectionChanged() {
+        guard browserMode != .mail else { return }
+        resetItemState()
+        loadNextItems()
+    }
+
+    func itemDidAppear(_ id: String) {
+        let ids = browserMode == .contacts ? contacts.map(\.id) : calendarEvents.map(\.id)
+        guard hasMoreItems, let index = ids.firstIndex(of: id), index >= max(0, ids.count - 15) else { return }
+        loadNextItems()
+    }
+
+    func loadNextItems() {
+        guard !isLoadingItems, browserMode != .mail, hasMoreItems || nextItemOffset == 0 else { return }
+        isLoadingItems = true
+        let mode = browserMode
+        let offset = nextItemOffset
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sourceID = mode == .contacts ? selectedContactSourceID : selectedCalendarSourceID
+        let reader = reader
+        itemLoadTask = Task {
+            do {
+                if mode == .contacts {
+                    let page = try await Task.detached(priority: .userInitiated) {
+                        try reader.loadContacts(sourceID: sourceID, matching: query, offset: offset, limit: 100)
+                    }.value
+                    guard !Task.isCancelled, browserMode == mode, selectedContactSourceID == sourceID,
+                          searchText.trimmingCharacters(in: .whitespacesAndNewlines) == query else { return }
+                    if offset == 0 { contacts = page.records } else { contacts.append(contentsOf: page.records) }
+                    nextItemOffset = page.nextOffset; itemResultTotal = page.totalCount
+                    if offset == 0 { selectedContactIDs = Set(page.records.prefix(1).map(\.id)) }
+                } else {
+                    let page = try await Task.detached(priority: .userInitiated) {
+                        try reader.loadCalendarEvents(sourceID: sourceID, matching: query, offset: offset, limit: 100)
+                    }.value
+                    guard !Task.isCancelled, browserMode == mode, selectedCalendarSourceID == sourceID,
+                          searchText.trimmingCharacters(in: .whitespacesAndNewlines) == query else { return }
+                    if offset == 0 { calendarEvents = page.records } else { calendarEvents.append(contentsOf: page.records) }
+                    nextItemOffset = page.nextOffset; itemResultTotal = page.totalCount
+                    if offset == 0 { selectedCalendarEventIDs = Set(page.records.prefix(1).map(\.id)) }
+                }
+            } catch {
+                if !Task.isCancelled { errorMessage = error.localizedDescription }
+            }
+            if browserMode == mode { isLoadingItems = false }
+        }
+    }
+
+    private func scheduleItemReload() {
+        itemLoadTask?.cancel()
+        itemLoadTask = Task {
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled else { return }
+            resetItemState()
+            loadNextItems()
+        }
+    }
+
+    private func resetItemState() {
+        contacts = []; calendarEvents = []
+        selectedContactIDs = []; selectedCalendarEventIDs = []
+        nextItemOffset = 0; itemResultTotal = 0; isLoadingItems = false
+    }
+
+    func exportContacts(_ records: [ContactRecord], format: ContactExportFormat) {
+        guard !records.isEmpty else { errorMessage = "There are no contacts to export."; return }
+        let panel = NSSavePanel()
+        panel.title = "Export Contacts"
+        panel.nameFieldStringValue = records.count == 1
+            ? AttachmentFileStore.safeFilename(records[0].displayName) + ".\(format.rawValue)"
+            : "OLM Browser Contacts.\(format.rawValue)"
+        panel.allowedContentTypes = format == .csv ? [.commaSeparatedText] : [UTType(filenameExtension: "vcf") ?? .data]
+        guard panel.runModal() == .OK, let destination = panel.url else { return }
+        do { try ContactCalendarExporter.contactData(records, format: format).write(to: destination, options: .atomic) }
+        catch { errorMessage = error.localizedDescription }
+    }
+
+    func exportCalendarEvents(_ records: [CalendarEventRecord], format: CalendarExportFormat) {
+        guard !records.isEmpty else { errorMessage = "There are no calendar events to export."; return }
+        let panel = NSSavePanel()
+        panel.title = "Export Calendar Events"
+        panel.nameFieldStringValue = records.count == 1
+            ? AttachmentFileStore.safeFilename(records[0].title) + ".\(format.rawValue)"
+            : "OLM Browser Calendar.\(format.rawValue)"
+        panel.allowedContentTypes = format == .csv ? [.commaSeparatedText] : [UTType(filenameExtension: "ics") ?? .data]
+        guard panel.runModal() == .OK, let destination = panel.url else { return }
+        do { try ContactCalendarExporter.calendarData(records, format: format).write(to: destination, options: .atomic) }
+        catch { errorMessage = error.localizedDescription }
+    }
+
+    func exportAllMatchingContacts(format: ContactExportFormat) {
+        let panel = NSSavePanel()
+        panel.title = "Export All Matching Contacts"
+        panel.nameFieldStringValue = "OLM Browser Contacts.\(format.rawValue)"
+        panel.allowedContentTypes = format == .csv ? [.commaSeparatedText] : [UTType(filenameExtension: "vcf") ?? .data]
+        guard panel.runModal() == .OK, let destination = panel.url else { return }
+        isExportingItems = true
+        let sourceID = selectedContactSourceID, query = searchText, reader = reader
+        Task {
+            do {
+                try await Task.detached(priority: .userInitiated) {
+                    let page = try reader.loadContacts(sourceID: sourceID, matching: query, offset: 0, limit: Int.max)
+                    try ContactCalendarExporter.contactData(page.records, format: format).write(to: destination, options: .atomic)
+                }.value
+            } catch { errorMessage = error.localizedDescription }
+            isExportingItems = false
+        }
+    }
+
+    func exportAllMatchingCalendarEvents(format: CalendarExportFormat) {
+        let panel = NSSavePanel()
+        panel.title = "Export All Matching Calendar Events"
+        panel.nameFieldStringValue = "OLM Browser Calendar.\(format.rawValue)"
+        panel.allowedContentTypes = format == .csv ? [.commaSeparatedText] : [UTType(filenameExtension: "ics") ?? .data]
+        guard panel.runModal() == .OK, let destination = panel.url else { return }
+        isExportingItems = true
+        let sourceID = selectedCalendarSourceID, query = searchText, reader = reader
+        Task {
+            do {
+                try await Task.detached(priority: .userInitiated) {
+                    let page = try reader.loadCalendarEvents(sourceID: sourceID, matching: query, offset: 0, limit: Int.max)
+                    try ContactCalendarExporter.calendarData(page.records, format: format).write(to: destination, options: .atomic)
+                }.value
+            } catch { errorMessage = error.localizedDescription }
+            isExportingItems = false
+        }
+    }
+
     private func resetPageState() {
         messageDetailTask?.cancel()
         inlineImageTask?.cancel()
@@ -606,6 +796,8 @@ final class ArchiveStore: ObservableObject {
             identity: current.identity,
             accounts: current.accounts,
             folders: folders,
+            contactSources: current.contactSources,
+            calendarSources: current.calendarSources,
             messages: current.messages
         )
         unreadCountsAreAccurate = true
@@ -631,6 +823,8 @@ final class ArchiveStore: ObservableObject {
                     unreadCount: 0
                 )
             },
+            contactSources: current.contactSources,
+            calendarSources: current.calendarSources,
             messages: current.messages
         )
         unreadCountsAreAccurate = false

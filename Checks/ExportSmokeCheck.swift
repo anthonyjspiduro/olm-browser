@@ -70,6 +70,12 @@ private struct SyntheticReader: OLMArchiveReading {
     func buildSearchIndex(progress: @escaping @Sendable (IndexProgress) -> Void) throws {}
     func searchMessages(matching query: String, folderID: String?, offset: Int, limit: Int, sort: SearchSort) throws -> MessagePage { MessagePage(messages: [], nextOffset: 0, totalCount: 0) }
     func loadMessageDetails(for message: MessageSummary) throws -> MessageSummary { message }
+    func loadContacts(sourceID: ArchiveItemSource.ID?, matching query: String, offset: Int, limit: Int) throws -> ContactPage {
+        ContactPage(records: [], nextOffset: 0, totalCount: 0)
+    }
+    func loadCalendarEvents(sourceID: ArchiveItemSource.ID?, matching query: String, offset: Int, limit: Int) throws -> CalendarEventPage {
+        CalendarEventPage(records: [], nextOffset: 0, totalCount: 0)
+    }
     func attachmentData(for attachment: AttachmentSummary) throws -> Data { Data("hello".utf8) }
     func operationalStatus() -> ArchiveOperationalStatus { ArchiveOperationalStatus(archiveEntries: 0, messageEntries: 0, attachmentEntries: 0, duplicateEntryPaths: 0, failedMessageEntries: 0, recoveredMalformedMessageEntries: 0, checksumFailureEntries: 0, unsupportedCompressionEntries: 0, cacheByteCount: 0) }
     func folderUnreadCounts() -> [String: Int]? { [:] }

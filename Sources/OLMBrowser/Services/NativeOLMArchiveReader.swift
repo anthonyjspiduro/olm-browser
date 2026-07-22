@@ -5,6 +5,7 @@ import Foundation
 final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
     private let stateLock = NSLock()
     private let interactiveReadCondition = NSCondition()
+    private let itemParseLock = NSLock()
     private var interactiveReadCount = 0
     private var archive: ZIPArchive?
     private var catalog = Catalog()
@@ -15,6 +16,8 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
     private var failedMessageEntryPaths: Set<String> = []
     private var recoveredMessageEntryPaths: Set<String> = []
     private var checksumFailureEntryPaths: Set<String> = []
+    private var contactsBySource: [ArchiveItemSource.ID: [ContactRecord]] = [:]
+    private var eventsBySource: [ArchiveItemSource.ID: [CalendarEventRecord]] = [:]
 
     func openArchive(at url: URL) throws -> ArchiveSnapshot {
         let resourceValues = try url.resourceValues(forKeys: [
@@ -26,7 +29,9 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
 
         let openedArchive = try ZIPArchive(url: url)
         let openedCatalog = buildCatalog(entries: openedArchive.entries)
-        guard !openedCatalog.messageEntriesByFolder.isEmpty else {
+        guard !openedCatalog.messageEntriesByFolder.isEmpty
+                || !openedCatalog.contactSources.isEmpty
+                || !openedCatalog.calendarSources.isEmpty else {
             throw ArchiveReaderError.noMessagesFound
         }
 
@@ -61,6 +66,8 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
             failedMessageEntryPaths = []
             recoveredMessageEntryPaths = []
             checksumFailureEntryPaths = []
+            contactsBySource = [:]
+            eventsBySource = [:]
         }
 
         return ArchiveSnapshot(
@@ -72,8 +79,50 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
             ),
             accounts: accounts,
             folders: folders,
+            contactSources: openedCatalog.contactSources,
+            calendarSources: openedCatalog.calendarSources,
             messages: []
         )
+    }
+
+    func loadContacts(sourceID: ArchiveItemSource.ID?, matching query: String, offset: Int, limit: Int) throws -> ContactPage {
+        beginInteractiveRead()
+        defer { endInteractiveRead() }
+        let sources = stateLock.withLock {
+            catalog.contactSources.filter { sourceID == nil || $0.id == sourceID }
+        }
+        var records: [ContactRecord] = []
+        for source in sources {
+            records.append(contentsOf: try contacts(for: source))
+        }
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !needle.isEmpty {
+            records = records.filter { $0.searchText.localizedCaseInsensitiveContains(needle) }
+        }
+        records.sort { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+        let start = min(max(0, offset), records.count)
+        let end = start + min(max(1, limit), records.count - start)
+        return ContactPage(records: Array(records[start..<end]), nextOffset: end, totalCount: records.count)
+    }
+
+    func loadCalendarEvents(sourceID: ArchiveItemSource.ID?, matching query: String, offset: Int, limit: Int) throws -> CalendarEventPage {
+        beginInteractiveRead()
+        defer { endInteractiveRead() }
+        let sources = stateLock.withLock {
+            catalog.calendarSources.filter { sourceID == nil || $0.id == sourceID }
+        }
+        var records: [CalendarEventRecord] = []
+        for source in sources {
+            records.append(contentsOf: try events(for: source))
+        }
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !needle.isEmpty {
+            records = records.filter { $0.searchText.localizedCaseInsensitiveContains(needle) }
+        }
+        records.sort { $0.startAt > $1.startAt }
+        let start = min(max(0, offset), records.count)
+        let end = start + min(max(1, limit), records.count - start)
+        return CalendarEventPage(records: Array(records[start..<end]), nextOffset: end, totalCount: records.count)
     }
 
     func loadMessages(in folderID: MailFolder.ID, offset: Int, limit: Int) throws -> MessagePage {
@@ -297,6 +346,30 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
         }
     }
 
+    private func contacts(for source: ArchiveItemSource) throws -> [ContactRecord] {
+        itemParseLock.lock()
+        defer { itemParseLock.unlock() }
+        if let cached = stateLock.withLock({ contactsBySource[source.id] }) { return cached }
+        let state = stateLock.withLock { (archive, allEntriesByPath[source.entryPath]?.first) }
+        guard let archive = state.0, let entry = state.1 else { throw ArchiveReaderError.unreadableArchive }
+        let data = try archive.data(for: entry, maximumSize: Self.maximumItemCollectionSize)
+        let parsed = OLMContactParser().parse(data: data, source: source)
+        stateLock.withLock { contactsBySource[source.id] = parsed }
+        return parsed
+    }
+
+    private func events(for source: ArchiveItemSource) throws -> [CalendarEventRecord] {
+        itemParseLock.lock()
+        defer { itemParseLock.unlock() }
+        if let cached = stateLock.withLock({ eventsBySource[source.id] }) { return cached }
+        let state = stateLock.withLock { (archive, allEntriesByPath[source.entryPath]?.first) }
+        guard let archive = state.0, let entry = state.1 else { throw ArchiveReaderError.unreadableArchive }
+        let data = try archive.data(for: entry, maximumSize: Self.maximumItemCollectionSize)
+        let parsed = OLMCalendarParser().parse(data: data, source: source)
+        stateLock.withLock { eventsBySource[source.id] = parsed }
+        return parsed
+    }
+
     private func parseConcurrently(
         entries: [ZIPEntry], folderID: MailFolder.ID, archive: ZIPArchive
     ) -> [MessageSummary] {
@@ -436,6 +509,7 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
     }
 
     static let maximumAttachmentSize: UInt64 = 256 * 1_024 * 1_024
+    static let maximumItemCollectionSize: UInt64 = 512 * 1_024 * 1_024
     static let maximumConcurrentMessageReads = 8
     static let indexDecodeChunkSize = 32
     static let unindexedInteractivePageSize = 25
@@ -444,6 +518,15 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
         var catalog = Catalog()
         let marker = "/com.microsoft.__Messages/"
         for entry in entries where entry.path.hasSuffix(".xml") {
+            if entry.path.hasSuffix("/Contacts.xml") || entry.path == "Local/Address Book/Contacts.xml" {
+                let source = Self.itemSource(for: entry, kind: .contacts)
+                catalog.contactSources.append(source)
+                if let account = source.accountID { catalog.accountAddresses.insert(account) }
+            } else if entry.path.hasSuffix("/Calendar.xml") {
+                let source = Self.itemSource(for: entry, kind: .calendar)
+                catalog.calendarSources.append(source)
+                if let account = source.accountID { catalog.accountAddresses.insert(account) }
+            }
             guard entry.path.hasPrefix("Accounts/"),
                   let markerRange = entry.path.range(of: marker),
                   entry.path[markerRange.upperBound...].lastPathComponent.hasPrefix("message_") else {
@@ -468,7 +551,19 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
                     .insert(ancestors.joined(separator: "/"))
             }
         }
+        catalog.contactSources.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        catalog.calendarSources.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         return catalog
+    }
+
+    private static func itemSource(for entry: ZIPEntry, kind: ArchiveItemKind) -> ArchiveItemSource {
+        let components = entry.path.split(separator: "/").map(String.init)
+        let account = components.first == "Accounts" && components.count > 1 ? components[1] : nil
+        let parentName = components.dropLast().last ?? (kind == .contacts ? "Contacts" : "Calendar")
+        return ArchiveItemSource(
+            id: entry.path, accountID: account, name: parentName,
+            kind: kind, entryPath: entry.path
+        )
     }
 
     private func makeFolders(from catalog: Catalog) -> [MailFolder] {
@@ -559,6 +654,8 @@ private struct Catalog: Sendable {
     var accountAddresses: Set<String> = []
     var folderPathsByAccount: [String: Set<String>] = [:]
     var messageEntriesByFolder: [String: [ZIPEntry]] = [:]
+    var contactSources: [ArchiveItemSource] = []
+    var calendarSources: [ArchiveItemSource] = []
 }
 
 private extension String.SubSequence {

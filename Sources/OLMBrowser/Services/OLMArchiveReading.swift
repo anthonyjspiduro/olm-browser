@@ -12,7 +12,7 @@ enum ArchiveReaderError: LocalizedError {
         case .unreadableArchive:
             "The selected archive could not be opened for reading."
         case .noMessagesFound:
-            "The archive opened, but no Outlook message folders were found."
+            "The archive opened, but no supported Outlook mail, contact, or calendar data was found."
         }
     }
 }
@@ -41,6 +41,8 @@ protocol OLMArchiveReading: Sendable {
         sort: SearchSort
     ) throws -> MessagePage
     func loadMessageDetails(for message: MessageSummary) throws -> MessageSummary
+    func loadContacts(sourceID: ArchiveItemSource.ID?, matching query: String, offset: Int, limit: Int) throws -> ContactPage
+    func loadCalendarEvents(sourceID: ArchiveItemSource.ID?, matching query: String, offset: Int, limit: Int) throws -> CalendarEventPage
     func attachmentData(for attachment: AttachmentSummary) throws -> Data
     func operationalStatus() -> ArchiveOperationalStatus
     func folderUnreadCounts() -> [MailFolder.ID: Int]?

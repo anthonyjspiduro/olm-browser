@@ -144,6 +144,8 @@ struct PreviewArchiveReader: OLMArchiveReading {
             identity: identity,
             accounts: [account],
             folders: [inbox, sent, projects],
+            contactSources: [],
+            calendarSources: [],
             messages: messages
         )
     }
@@ -161,6 +163,12 @@ struct PreviewArchiveReader: OLMArchiveReading {
     }
 
     func loadMessageDetails(for message: MessageSummary) throws -> MessageSummary { message }
+    func loadContacts(sourceID: ArchiveItemSource.ID?, matching query: String, offset: Int, limit: Int) throws -> ContactPage {
+        ContactPage(records: [], nextOffset: 0, totalCount: 0)
+    }
+    func loadCalendarEvents(sourceID: ArchiveItemSource.ID?, matching query: String, offset: Int, limit: Int) throws -> CalendarEventPage {
+        CalendarEventPage(records: [], nextOffset: 0, totalCount: 0)
+    }
 
     func attachmentData(for attachment: AttachmentSummary) throws -> Data {
         throw ArchiveReaderError.unreadableArchive

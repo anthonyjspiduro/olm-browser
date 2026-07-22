@@ -37,16 +37,26 @@ private struct BrowserView: View {
             FolderSidebar()
                 .navigationSplitViewColumnWidth(min: 190, ideal: 230, max: 310)
         } content: {
-            MessageListView()
-                .navigationSplitViewColumnWidth(min: 300, ideal: 370, max: 520)
+            Group {
+                switch store.browserMode {
+                case .mail: MessageListView()
+                case .contacts: ContactListView()
+                case .calendar: CalendarEventListView()
+                }
+            }
+            .navigationSplitViewColumnWidth(min: 300, ideal: 370, max: 520)
         } detail: {
-            MessageDetailView()
+            switch store.browserMode {
+            case .mail: MessageDetailView()
+            case .contacts: ContactDetailView()
+            case .calendar: CalendarEventDetailView()
+            }
         }
         .navigationTitle(store.snapshot?.identity.displayName ?? "OLM Browser")
         .searchable(
             text: $store.searchText,
             placement: .toolbar,
-            prompt: "Search entire archive"
+            prompt: searchPrompt
         )
         .onChange(of: store.searchText) {
             store.searchTextChanged()
@@ -64,6 +74,14 @@ private struct BrowserView: View {
                     ArchiveInformationView()
                 }
             }
+        }
+    }
+
+    private var searchPrompt: String {
+        switch store.browserMode {
+        case .mail: "Search entire archive"
+        case .contacts: "Search contacts"
+        case .calendar: "Search calendar"
         }
     }
 }

@@ -8,24 +8,58 @@ struct FolderSidebar: View {
             if let snapshot = store.snapshot {
                 Section {
                     ArchiveHeader(identity: snapshot.identity)
+                    Picker("Section", selection: $store.browserMode) {
+                        ForEach(BrowserMode.allCases) { mode in
+                            Label(mode.label, systemImage: mode.symbolName).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.menu)
                 }
 
-                ForEach(snapshot.accounts) { account in
-                    Section(account.displayName) {
-                        OutlineGroup(folderTree(for: account.id), children: \.children) { node in
-                            FolderRow(
-                                folder: node.folder,
-                                showsUnreadCount: store.unreadCountsAreAccurate
-                            )
-                                .tag(node.folder.id)
+                switch store.browserMode {
+                case .mail:
+                    ForEach(snapshot.accounts) { account in
+                        Section(account.displayName) {
+                            OutlineGroup(folderTree(for: account.id), children: \.children) { node in
+                                FolderRow(
+                                    folder: node.folder,
+                                    showsUnreadCount: store.unreadCountsAreAccurate
+                                )
+                                    .tag(node.folder.id)
+                            }
                         }
+                    }
+                case .contacts:
+                    Section("Contact Lists") {
+                        ForEach(snapshot.contactSources) { source in
+                            Button { store.selectedContactSourceID = source.id; store.itemSourceSelectionChanged() } label: {
+                                SourceLabel(source: source, systemImage: "person.2")
+                            }
+                            .buttonStyle(.plain)
+                            .fontWeight(store.selectedContactSourceID == source.id ? .semibold : .regular)
+                        }
+                        if snapshot.contactSources.isEmpty { ContentUnavailableView("No Contacts", systemImage: "person.crop.circle.badge.xmark") }
+                    }
+                case .calendar:
+                    Section("Calendars") {
+                        ForEach(snapshot.calendarSources) { source in
+                            Button { store.selectedCalendarSourceID = source.id; store.itemSourceSelectionChanged() } label: {
+                                SourceLabel(source: source, systemImage: "calendar")
+                            }
+                            .buttonStyle(.plain)
+                            .fontWeight(store.selectedCalendarSourceID == source.id ? .semibold : .regular)
+                        }
+                        if snapshot.calendarSources.isEmpty { ContentUnavailableView("No Calendars", systemImage: "calendar.badge.exclamationmark") }
                     }
                 }
             }
         }
         .listStyle(.sidebar)
         .onChange(of: store.selectedFolderID) {
-            store.folderSelectionChanged()
+            if store.browserMode == .mail { store.folderSelectionChanged() }
+        }
+        .onChange(of: store.browserMode) {
+            store.browserModeChanged()
         }
     }
 
@@ -40,6 +74,22 @@ struct FolderSidebar: View {
             }
         }
         return children(of: nil)
+    }
+}
+
+private struct SourceLabel: View {
+    let source: ArchiveItemSource
+    let systemImage: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: systemImage)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(source.name).lineLimit(1)
+                Text(source.accountID ?? "On My Computer")
+                    .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+            }
+        }
     }
 }
 

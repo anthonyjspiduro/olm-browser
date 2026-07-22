@@ -45,6 +45,8 @@ enum DiagnosticReportSmokeCheck {
                 messageCount: 123,
                 unreadCount: 7
             )],
+            contactSources: [],
+            calendarSources: [],
             messages: [message]
         )
         let status = ArchiveOperationalStatus(

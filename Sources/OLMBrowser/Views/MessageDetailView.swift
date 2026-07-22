@@ -76,7 +76,7 @@ struct MessageDetailView: View {
             }
             .background(.background)
             .onChange(of: remoteIdentity(message)) {
-                bodyMode = message.htmlBody == nil ? .plainText : .html
+                bodyMode = .html
                 remoteImageApproval.selectionChanged(to: remoteIdentity(message))
                 pendingRemoteImageApproval = nil
                 showingRemoteImageWarning = false

@@ -14,19 +14,16 @@ ZIP64 central-directory reader ----> archive fingerprint
         |
         v
 OLM entry catalog
-   |          |             |
-folders    messages     attachments
-   |          |             |
-   +----------+-------------+
+   |          |             |              |
+folders    messages     attachments   contacts/calendars
+   |          |             |              |
+   +----------+-------------+--------------+
               |
               v
       normalized domain model
           |             |
           v             v
     SwiftUI browser   SQLite/FTS5 cache
-                            |
-                            v
-                   optional grounded AI
 ```
 
 ## Major components
@@ -41,7 +38,11 @@ The source URL must only be opened for reading. File access is retained using a 
 
 ### Parsing
 
-The OLM parser turns Outlook XML into normalized accounts, folders, messages, contacts, calendar items, and attachment references. Normalized message headers include sender, To/CC/BCC, sent and received dates, message ID, read/flag state, and attachment metadata. XML parsing is streaming rather than DOM-based. If an entry is truncated or malformed after at least one recognized field inside an OLM message container, fields completed before the XML error are retained as a recovered message and counted separately. XML without a recognized message container and field remains unreadable; neither case stops adjacent messages from loading or indexing. Message bodies are loaded lazily and cached under a bounded policy.
+The OLM parsers turn Outlook XML into normalized accounts, folders, messages, contacts, calendar items, and attachment references. Normalized message headers include sender, To/CC/BCC, sent and received dates, message ID, read/flag state, and attachment metadata. Contact normalization retains names, company/title, email addresses, phone numbers, notes, and modification date. Calendar normalization retains title, start/end, all-day/private flags, location, description, organizer, attendees, reminders, and basic recurrence metadata.
+
+XML parsing uses `XMLParser` event callbacks rather than constructing a DOM. Mail bodies remain lazy. `Contacts.xml` and `Calendar.xml` collections are cataloged from the central directory without decoding during archive opening, parsed only when the user selects the relevant collection, and cached in memory only for that archive-open session. A selected collection is filtered and returned to the UI in 100-record pages. Large aggregate calendar entries currently require their bounded decoded XML data and normalized records in memory for the first parse; persistent item indexing is planned.
+
+If an entry is truncated or malformed after at least one recognized field inside an OLM message container, fields completed before the XML error are retained as a recovered message and counted separately. XML without a recognized message container and field remains unreadable; neither case stops adjacent messages from loading or indexing.
 
 ### Indexing
 
@@ -53,11 +54,11 @@ No attachment payload is copied into the index. Derived document text is opt-in 
 
 ### Presentation
 
-The primary interface is a native three-column `NavigationSplitView`. Indexed folder and search rows load without message-body decoding, retain their requested order, and hydrate their full message only when selected. Unindexed fallback pages retain their requested order after parallel decoding. The next page is requested before the visible boundary:
+The primary interface is a native three-column `NavigationSplitView` with Mail, Contacts, and Calendar modes. In Mail, indexed folder and search rows load without message-body decoding, retain their requested order, and hydrate their full message only when selected. Unindexed fallback pages retain their requested order after parallel decoding. Contact and calendar modes show their discovered collection sources, searchable 100-record lists, and a complete normalized detail view. The next page is requested before the visible boundary:
 
-1. Accounts and folders
-2. Filterable message results
-3. Message body and attachments
+1. Accounts/folders or contact/calendar collections
+2. Filterable message/contact/event results
+3. Message, contact, or event detail and export actions
 
 HTML mail is rendered in a locked-down `WKWebView` with an ephemeral data store and no external base URL. Before loading HTML, the app extracts origins only from explicit `https:` image attributes, responsive image sets, and image-bearing inline CSS. The initial document has `img-src data:` and therefore makes no remote image request. When remote images exist, the viewer shows “Remote content blocked” beside a “Load Remote Images” button; the button is disabled with an explanation when every discovered image is insecure HTTP. The confirmation boundary for an enabled button warns that a request can reveal the user's IP address, access time, and message-view activity to senders or trackers.
 
@@ -87,15 +88,14 @@ Message export is explicit and local. Plain-text, JSON, PDF, and CSV exports inc
 
 Batch export operates only on messages already loaded in the active folder or search list. CSV produces one atomic table; EML, text, JSON, and PDF use a temporary staging directory followed by collision-safe copies to the chosen folder. The batch never overwrites existing files, is capped at 1,000 messages and 1 GB of generated output, and does not broaden attachment extraction limits.
 
-### AI boundary
-
-AI features operate on an explicit selection or query result set. Every generated claim carries source message identifiers. The app supports a local-only mode; cloud requests require a visible provider configuration and a preview of the data scope.
+Contact export writes folded RFC-style vCard 4.0 or quote-escaped CSV. Calendar export writes folded iCalendar 2.0 or quote-escaped CSV, including normalized attendees, reminders, privacy state, and recurrence rules when the Outlook pattern maps safely to an iCalendar frequency. Exports can contain one record, a multi-selection, the records already loaded in the list, or—through a separately labeled action—all records matching the current collection and search. All writes require an explicit Save action; an entire collection is never expanded as a side effect of exporting a smaller visible selection.
 
 ## Performance goals
 
 - Show archive identity and folder skeleton within five seconds when the central directory is healthy.
 - Keep the interface responsive while cataloging 250,000 or more entries.
-- Use bounded memory independent of total archive size.
+- Keep mail browsing and indexing memory bounded independently of total archive size.
+- Bound any decoded contact/calendar collection to 512 MB; move large collection parsing to a persistent item index in the next phase.
 - Resume indexing after quit, sleep, or cancellation.
 - Return indexed metadata searches within 200 ms on typical hardware.
 
@@ -109,4 +109,5 @@ A malformed message, attachment, or folder must be isolated as an entry-level di
 2. ZIP64 entry catalog and archive diagnostics.
 3. Folder/message XML parsing and lazy body loading.
 4. Attachment preview/export and SQLite/FTS5 search.
-5. Contacts, calendars, conversation reconstruction, and optional AI.
+5. Contact/calendar browsing and recovery export.
+6. Persistent item indexing, complex recurrence fidelity, and conversation reconstruction.

@@ -36,7 +36,10 @@ The reader has been validated against a 26 GB OLM containing 83,172 messages acr
 - Secured HTML email rendering with:
   - JavaScript disabled
   - Ephemeral WebKit storage
-  - Remote images and other network resources blocked
+  - Remote images and every other network resource blocked by default
+  - Per-message “Load Remote Images” approval after a privacy warning
+  - Exact HTTPS image-origin allowlisting derived from that message's HTML
+  - Insecure HTTP images always blocked with a visible status
   - Frames, objects, forms, media, and network connections blocked
   - Navigation and popup creation blocked
   - Referrer suppression
@@ -56,6 +59,7 @@ The reader has been validated against a 26 GB OLM containing 83,172 messages acr
 - Message export as `.eml` (including available attachments), plain text, and JSON
 - Background archive opening, paging, search, and indexing
 - Standalone parser, paging, attachment, export, structured-search, and FTS5 smoke checks
+- Synthetic remote-image policy, CSP, local-CID, and per-message approval smoke checks
 
 ## Build and run
 
@@ -101,9 +105,15 @@ Search results load in 100-message pages. The message-list controls can restrict
 - The OLM is opened for reading only.
 - Messages and attachments are not uploaded anywhere.
 - HTML email runs with JavaScript disabled.
-- Remote content and tracking pixels are blocked by Content Security Policy.
-- The HTML viewer uses a nonpersistent WebKit data store.
-- Inline images are read only from resolved local attachment entries and converted to bounded `data:` resources; unmatched CIDs remain blocked.
+- Remote content and tracking pixels are blocked by default for every message; displaying an HTML message does not approve or request them.
+- A “Load Remote Images” button appears when the message HTML contains a remote image. It is enabled only when the HTML names one or more explicit HTTPS image origins; pressing it first presents this warning: requesting remote images can reveal the user's IP address, access time, and message-view activity to senders or trackers.
+- Confirming the warning reloads only the selected message with `img-src` restricted to the exact HTTPS origins found in its image markup and image-bearing inline CSS. Redirects or nested requests to any other origin remain blocked.
+- Approval exists only in memory for the current message and archive-open session. Selecting another message, reopening an archive, quitting, or pressing “Block Remote Images” removes it. Approval never extends to a sender, domain, folder, archive, or later launch.
+- Insecure `http:` images are never allowlisted. The viewer reports when HTTP images remain unavailable, even after approved HTTPS images load.
+- The HTML viewer uses a nonpersistent WebKit data store and a `nil` external base URL.
+- JavaScript, scripts, forms and form submission, frames and iframes, objects and embeds, audio and video, WebSocket/fetch/XHR connections, workers, manifests, popup creation, link navigation, and external base URLs remain blocked after image approval. Referrer transmission is suppressed.
+- Inline images are read only from resolved local attachment entries and served through a bounded, app-local WebKit scheme; unmatched CIDs remain blocked.
+- Remote image documents cannot read local attachment data: attachment bytes never enter the message HTML, scripts and connections are disabled, and the only newly permitted network requests are image loads to the selected message's HTTPS origin set.
 - Attachment and message exports happen only after an explicit user action.
 - Search indexes remain local in the user's cache directory.
 - AI and cloud services are not currently connected.

@@ -3,6 +3,9 @@ import SwiftUI
 struct MessageDetailView: View {
     @EnvironmentObject private var store: ArchiveStore
     @State private var bodyMode: BodyMode = .html
+    @State private var remoteImageApproval = RemoteImageApprovalState()
+    @State private var pendingRemoteImageApproval: MessageRemoteContentIdentity?
+    @State private var showingRemoteImageWarning = false
 
     var body: some View {
         if let message = store.selectedMessage {
@@ -14,7 +17,7 @@ struct MessageDetailView: View {
                         .padding(.vertical, 18)
 
                     if message.htmlBody != nil {
-                        HStack {
+                        HStack(spacing: 10) {
                             Picker("Message body", selection: $bodyMode) {
                                 Text("HTML").tag(BodyMode.html)
                                 Text("Plain Text").tag(BodyMode.plainText)
@@ -23,18 +26,31 @@ struct MessageDetailView: View {
                             .labelsHidden()
                             .frame(width: 190)
                             Spacer()
-                            if bodyMode == .html {
-                                Label("Remote content blocked", systemImage: "shield.checkered")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+                            if bodyMode == .html, let html = message.htmlBody {
+                                RemoteImageControls(
+                                    policy: RemoteImagePolicy.inspect(html),
+                                    isApproved: remoteImageApproval.isApproved(for: remoteIdentity(message)),
+                                    load: {
+                                        pendingRemoteImageApproval = remoteIdentity(message)
+                                        showingRemoteImageWarning = true
+                                    },
+                                    block: { remoteImageApproval.block() }
+                                )
                             }
                         }
                         .padding(.bottom, 12)
                     }
 
                     if bodyMode == .html, let html = message.htmlBody {
-                        HTMLMessageView(html: html, inlineImages: store.inlineImages)
-                            .id(message.id)
+                        let policy = RemoteImagePolicy.inspect(html)
+                        HTMLMessageView(
+                            html: html,
+                            inlineImages: store.inlineImages,
+                            allowedRemoteImageOrigins: remoteImageApproval.isApproved(for: remoteIdentity(message))
+                                ? policy.httpsOrigins
+                                : []
+                        )
+                            .id(remoteIdentity(message))
                             .frame(minHeight: 480)
                     } else {
                         Text(message.body)
@@ -53,11 +69,26 @@ struct MessageDetailView: View {
                 .frame(maxWidth: 760, alignment: .leading)
             }
             .background(.background)
-            .onChange(of: message.id) {
+            .onChange(of: remoteIdentity(message)) {
                 bodyMode = message.htmlBody == nil ? .plainText : .html
+                remoteImageApproval.selectionChanged(to: remoteIdentity(message))
+                pendingRemoteImageApproval = nil
+                showingRemoteImageWarning = false
             }
-            .task(id: message.id) {
+            .task(id: remoteIdentity(message)) {
                 store.loadInlineImages(for: message)
+            }
+            .alert("Load Remote Images?", isPresented: $showingRemoteImageWarning) {
+                Button("Cancel", role: .cancel) { pendingRemoteImageApproval = nil }
+                Button("Load Images") {
+                    let current = remoteIdentity(message)
+                    guard pendingRemoteImageApproval == current,
+                          store.selectedMessage.map(remoteIdentity) == current else { return }
+                    remoteImageApproval.approve(current)
+                    pendingRemoteImageApproval = nil
+                }
+            } message: {
+                Text("Requesting remote images can reveal your IP address, access time, and message-view activity to senders or trackers. Approval applies only to this message.")
             }
         } else {
             ContentUnavailableView(
@@ -66,6 +97,46 @@ struct MessageDetailView: View {
                 description: Text("Select a message to preview it.")
             )
         }
+    }
+
+    private func remoteIdentity(_ message: MessageSummary) -> MessageRemoteContentIdentity {
+        MessageRemoteContentIdentity(
+            archiveSessionID: store.archiveSessionID,
+            messageID: message.id,
+            folderID: message.folderID
+        )
+    }
+}
+
+private struct RemoteImageControls: View {
+    let policy: RemoteImagePolicy
+    let isApproved: Bool
+    let load: () -> Void
+    let block: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if isApproved {
+                Label("Remote HTTPS images loaded", systemImage: "checkmark.shield")
+                Button("Block Remote Images", action: block)
+            } else {
+                Label("Remote content blocked", systemImage: "shield.checkered")
+                if policy.hasRemoteImages {
+                    Button("Load Remote Images", action: load)
+                        .disabled(policy.httpsOrigins.isEmpty)
+                        .help(policy.httpsOrigins.isEmpty
+                              ? "This message contains only insecure HTTP images, which cannot be loaded."
+                              : "Load HTTPS images for this message only.")
+                }
+            }
+            if policy.insecureHTTPResourceCount > 0 {
+                Label("HTTP images remain blocked", systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(.orange)
+                    .help("Insecure HTTP images cannot be loaded.")
+            }
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
     }
 }
 

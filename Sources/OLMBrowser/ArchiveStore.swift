@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 @MainActor
 final class ArchiveStore: ObservableObject {
     @Published private(set) var snapshot: ArchiveSnapshot?
+    @Published private(set) var archiveSessionID = UUID()
     @Published var selectedFolderID: MailFolder.ID?
     @Published var selectedMessageID: MessageSummary.ID?
     @Published var searchText = ""
@@ -84,6 +85,7 @@ final class ArchiveStore: ObservableObject {
                     worker.cancel()
                 }
                 guard !Task.isCancelled else { isOpening = false; return }
+                archiveSessionID = UUID()
                 snapshot = loaded
                 searchText = ""
                 selectedFolderID = loaded.folders.first(where: { $0.kind == .inbox })?.id
@@ -212,6 +214,7 @@ final class ArchiveStore: ObservableObject {
         indexTask?.cancel()
         inlineImageTask?.cancel()
         snapshot = nil
+        archiveSessionID = UUID()
         selectedFolderID = nil
         selectedMessageID = nil
         searchText = ""

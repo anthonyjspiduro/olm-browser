@@ -59,7 +59,13 @@ The primary interface is a native three-column `NavigationSplitView`:
 2. Filterable message results
 3. Message body and attachments
 
-HTML mail is rendered in a locked-down `WKWebView`: scripts disabled, remote resources blocked, and navigation intercepted. Plain text remains available as a fallback. Resolved inline image attachments are bounded, read from the archive, and substituted as `data:` image URLs; the CSP continues to reject HTTP(S), scripts, frames, forms, media, objects, and connections.
+HTML mail is rendered in a locked-down `WKWebView` with an ephemeral data store and no external base URL. Before loading HTML, the app extracts origins only from explicit `https:` image attributes, responsive image sets, and image-bearing inline CSS. The initial document has `img-src data:` and therefore makes no remote image request. When remote images exist, the viewer shows “Remote content blocked” beside a “Load Remote Images” button; the button is disabled with an explanation when every discovered image is insecure HTTP. The confirmation boundary for an enabled button warns that a request can reveal the user's IP address, access time, and message-view activity to senders or trackers.
+
+Confirmation creates an in-memory approval keyed to the archive-open session, folder, and selected message. The document is then rebuilt with `img-src data:` plus only the sorted, exact HTTPS origins discovered in that message. Approval is cleared when selection changes, the archive is reopened, the app quits, or “Block Remote Images” is pressed; it never trusts a sender, domain, folder, archive, redirect target, or future launch. `http:` image URLs are counted but never admitted, and a visible “HTTP images remain blocked” status remains after HTTPS approval.
+
+The CSP is placed before all message markup and continues to set `default-src`, `script-src`, `frame-src`, `child-src`, `media-src`, `connect-src`, `object-src`, `base-uri`, `form-action`, `manifest-src`, and `worker-src` to `'none'` as applicable. JavaScript is also disabled in WebKit preferences; form submission, popup creation, and all link navigation are intercepted; and the document sets `no-referrer`. Thus image approval does not enable forms, frames/iframes, objects/embeds, audio/video, WebSocket/fetch/XHR, workers, external base URLs, navigation, or referrer transmission.
+
+Plain text remains available as a fallback. Resolved inline image attachments are bounded, read from the archive, and mapped from `cid:` references to opaque URLs served by an in-memory `WKURLSchemeHandler`. Attachment bytes never enter the message HTML, and neither archive paths nor attachment URLs are exposed to the document. Unmatched CIDs remain blocked. The app-local scheme is admitted only by `img-src`; remote content cannot inspect its responses because scripts and connections stay disabled.
 
 ### Attachments
 

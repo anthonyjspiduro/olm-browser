@@ -19,6 +19,8 @@ The reader has been validated against a 26 GB OLM containing 83,172 messages acr
 - `.olm` Finder document registration and Open dialog
 - Read-only ZIP64 central-directory parsing and random-access entry reads
 - Stored and raw-DEFLATE ZIP entry support through a minimal zlib bridge
+- CRC-32 verification before decoded entry bytes reach messages, attachments, previews, or exports
+- Aggregate unsupported-compression and encountered integrity-failure diagnostics
 - Rejection of encrypted entries and bounded entry decompression
 - Automatic Outlook account and folder discovery
 - Expandable nested folder hierarchy
@@ -30,7 +32,7 @@ The reader has been validated against a 26 GB OLM containing 83,172 messages acr
 - Quick Look attachment preview, Save As, drag-to-Finder, and export-all
 - Unique per-session temporary files with close/quit and 24-hour stale cleanup
 - 256 MB per-attachment and 1 GB batch-export extraction limits
-- Missing, duplicate, malformed, and oversized attachment diagnostics
+- Missing, duplicate, malformed, oversized, and corrupt attachment diagnostics
 - Local inline `cid:` image resolution with separate 20 MB image and 64 MB message limits
 - Plain-text message rendering with selectable text
 - Secured HTML email rendering with:
@@ -56,12 +58,12 @@ The reader has been validated against a 26 GB OLM containing 83,172 messages acr
 - Optional folder-scoped search and relevance/newest/oldest sorting
 - Cancelable archive opening and indexing
 - Search-index rebuild, cache deletion/compaction, and cache-size reporting
-- Archive entry, attachment payload, duplicate-path, and unreadable-message diagnostics
+- Archive entry, attachment payload, duplicate-path, CRC-failure, unsupported-compression, recovered-malformed-message, and unreadable-message diagnostics
 - Explicit JSON diagnostic-report export containing aggregate health metrics only
 - Message export as `.eml` (including available attachments), plain text, JSON, PDF, and CSV
 - Batch export of up to 1,000 currently loaded messages with a 1 GB output limit
 - Background archive opening, paging, search, and indexing
-- Standalone parser, paging, attachment, export, diagnostics, structured-search, and FTS5 smoke checks
+- Standalone parser, archive-integrity, paging, attachment, export, diagnostics, structured-search, and FTS5 smoke checks
 - Synthetic remote-image policy, CSP, local-CID, and per-message approval smoke checks
 
 ## Build and run
@@ -124,6 +126,7 @@ The message Export menu supports EML, plain text, JSON, PDF, and CSV. “Export 
 - Remote image documents cannot read local attachment data: attachment bytes never enter the message HTML, scripts and connections are disabled, and the only newly permitted network requests are image loads to the selected message's HTTPS origin set.
 - Attachment and message exports happen only after an explicit user action.
 - Diagnostic reports are exported only after an explicit user action and omit archive paths, filenames, folder names, message content, participant data, attachment names, and attachment payloads.
+- Diagnostic-report schema 2 adds only aggregate CRC-failure, unsupported-compression, recovered-malformed-message, and unreadable-message counts; it does not export entry paths or CRC values.
 - Search indexes remain local in the user's cache directory.
 - AI and cloud services are not currently connected.
 
@@ -136,13 +139,12 @@ The message Export menu supports EML, plain text, JSON, PDF, and CSV. “Export 
 
 ## Planned features
 
-1. Add CRC verification, unsupported-compression reporting, and more granular malformed-XML recovery.
-2. Add detailed phase/byte progress during initial archive opening.
-3. Add recent archives, drag-and-drop opening, and persistent security-scoped access.
-4. Reconstruct conversations and expose contacts and calendar records.
-5. Add optional local or explicitly configured grounded AI features.
-6. Produce a universal binary, Developer ID signature, notarization, and distributable DMG.
-7. Expand accessibility, keyboard navigation, localization, and cross-version OLM testing.
+1. Add detailed phase/byte progress during initial archive opening.
+2. Add recent archives, drag-and-drop opening, and persistent security-scoped access.
+3. Reconstruct conversations and expose contacts and calendar records.
+4. Add optional local or explicitly configured grounded AI features.
+5. Produce a universal binary, Developer ID signature, notarization, and distributable DMG.
+6. Expand accessibility, keyboard navigation, localization, and cross-version OLM testing.
 
 ## Project layout
 

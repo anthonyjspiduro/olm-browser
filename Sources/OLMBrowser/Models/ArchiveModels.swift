@@ -66,6 +66,7 @@ enum AttachmentDiagnostic: Hashable, Sendable {
     case duplicatePayload
     case malformedReference
     case oversized(limit: Int64)
+    case unsupportedCompression(method: UInt16)
 
     var description: String {
         switch self {
@@ -73,6 +74,7 @@ enum AttachmentDiagnostic: Hashable, Sendable {
         case .duplicatePayload: "The archive contains duplicate payload entries for this attachment."
         case .malformedReference: "The attachment reference is malformed or points outside its message folder."
         case .oversized(let limit): "The attachment exceeds the \(ByteCountFormatter.string(fromByteCount: limit, countStyle: .file)) extraction limit."
+        case .unsupportedCompression(let method): "The attachment uses unsupported ZIP compression method \(method)."
         }
     }
 }
@@ -184,5 +186,8 @@ struct ArchiveOperationalStatus: Sendable {
     let attachmentEntries: Int
     let duplicateEntryPaths: Int
     let failedMessageEntries: Int
+    let recoveredMalformedMessageEntries: Int
+    let checksumFailureEntries: Int
+    let unsupportedCompressionEntries: Int
     let cacheByteCount: Int64
 }

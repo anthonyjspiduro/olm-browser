@@ -81,6 +81,9 @@ private struct ArchiveInformationView: View {
                     row("Attachment payloads", status.attachmentEntries.formatted())
                     row("Duplicate ZIP paths", status.duplicateEntryPaths.formatted())
                     row("Unreadable messages", status.failedMessageEntries.formatted())
+                    row("Recovered malformed messages", status.recoveredMalformedMessageEntries.formatted())
+                    row("CRC failures", status.checksumFailureEntries.formatted())
+                    row("Unsupported compression", status.unsupportedCompressionEntries.formatted())
                     row("Search cache", ByteCountFormatter.string(fromByteCount: status.cacheByteCount, countStyle: .file))
                 }
                 .font(.callout)

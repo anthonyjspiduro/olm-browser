@@ -1,6 +1,12 @@
 import Foundation
 
 final class OLMMessageParser: NSObject, XMLParserDelegate {
+    enum Outcome {
+        case parsed(MessageSummary)
+        case recovered(MessageSummary)
+        case failed
+    }
+
     private var elements: [String] = []
     private var text = ""
     private var subject = ""
@@ -17,13 +23,25 @@ final class OLMMessageParser: NSObject, XMLParserDelegate {
     private var isRead = true
     private var isFlagged = false
     private var attachments: [AttachmentSummary] = []
+    private var sawMessageContainer = false
+    private var recognizedFieldCount = 0
 
     func parse(data: Data, entryPath: String, folderID: String) -> MessageSummary? {
+        switch parseOutcome(data: data, entryPath: entryPath, folderID: folderID) {
+        case .parsed(let message), .recovered(let message): message
+        case .failed: nil
+        }
+    }
+
+    func parseOutcome(data: Data, entryPath: String, folderID: String) -> Outcome {
         reset()
         let parser = XMLParser(data: data)
         parser.delegate = self
         parser.shouldResolveExternalEntities = false
-        guard parser.parse() else { return nil }
+        let parsedCompletely = parser.parse()
+        guard parsedCompletely || (sawMessageContainer && recognizedFieldCount > 0) else {
+            return .failed
+        }
 
         let resolvedSender = sender ?? MailParticipant(name: "Unknown Sender", address: "")
         let parsedReceivedDate = Self.parseDate(receivedDateText)
@@ -35,7 +53,7 @@ final class OLMMessageParser: NSObject, XMLParserDelegate {
             ? String(resolvedBody.prefix(240)).replacingOccurrences(of: "\n", with: " ")
             : preview
 
-        return MessageSummary(
+        let message = MessageSummary(
             id: messageID.isEmpty ? entryPath : messageID,
             folderID: folderID,
             subject: subject.isEmpty ? "(No Subject)" : subject,
@@ -53,6 +71,7 @@ final class OLMMessageParser: NSObject, XMLParserDelegate {
             isFlagged: isFlagged,
             attachments: attachments
         )
+        return parsedCompletely ? .parsed(message) : .recovered(message)
     }
 
     func parser(
@@ -65,7 +84,10 @@ final class OLMMessageParser: NSObject, XMLParserDelegate {
         elements.append(elementName)
         text = ""
 
+        if elementName == "email" { sawMessageContainer = true }
+
         if elementName == "emailAddress" {
+            recognizedFieldCount += 1
             let participant = MailParticipant(
                 name: attributeDict["OPFContactEmailAddressName"] ?? "",
                 address: attributeDict["OPFContactEmailAddressAddress"] ?? ""
@@ -83,6 +105,7 @@ final class OLMMessageParser: NSObject, XMLParserDelegate {
                 sender = participant
             }
         } else if elementName == "messageAttachment" {
+            recognizedFieldCount += 1
             let index = attachments.count
             let size = Int64(attributeDict["OPFAttachmentContentFileSize"] ?? "") ?? 0
             let filename = attributeDict["OPFAttachmentName"]
@@ -110,16 +133,17 @@ final class OLMMessageParser: NSObject, XMLParserDelegate {
         qualifiedName qName: String?
     ) {
         switch elementName {
-        case "OPFMessageCopySubject": subject = text
-        case "OPFMessageCopyBody": body = text
-        case "OPFMessageCopyHTMLBody": htmlBody = text
-        case "OPFMessageCopyPreview": preview = text
-        case "OPFMessageCopyMessageID": messageID = text
-        case "OPFMessageCopySentTime": sentDateText = text
-        case "OPFMessageCopyReceivedTime": receivedDateText = text
-        case "OPFMessageGetIsRead": isRead = Self.parseBoolean(text, defaultValue: true)
+        case "OPFMessageCopySubject": subject = text; recognizedFieldCount += 1
+        case "OPFMessageCopyBody": body = text; recognizedFieldCount += 1
+        case "OPFMessageCopyHTMLBody": htmlBody = text; recognizedFieldCount += 1
+        case "OPFMessageCopyPreview": preview = text; recognizedFieldCount += 1
+        case "OPFMessageCopyMessageID": messageID = text; recognizedFieldCount += 1
+        case "OPFMessageCopySentTime": sentDateText = text; recognizedFieldCount += 1
+        case "OPFMessageCopyReceivedTime": receivedDateText = text; recognizedFieldCount += 1
+        case "OPFMessageGetIsRead": isRead = Self.parseBoolean(text, defaultValue: true); recognizedFieldCount += 1
         case "OPFMessageCopyGetFlagStatus":
             isFlagged = Self.parseBoolean(text, defaultValue: false)
+            recognizedFieldCount += 1
         default: break
         }
         if elements.last == elementName { elements.removeLast() }
@@ -143,6 +167,8 @@ final class OLMMessageParser: NSObject, XMLParserDelegate {
         isRead = true
         isFlagged = false
         attachments = []
+        sawMessageContainer = false
+        recognizedFieldCount = 0
     }
 
     private static func parseBoolean(_ value: String, defaultValue: Bool) -> Bool {

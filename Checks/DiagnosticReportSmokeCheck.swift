@@ -53,6 +53,9 @@ enum DiagnosticReportSmokeCheck {
             attachmentEntries: 89,
             duplicateEntryPaths: 3,
             failedMessageEntries: 2,
+            recoveredMalformedMessageEntries: 1,
+            checksumFailureEntries: 4,
+            unsupportedCompressionEntries: 5,
             cacheByteCount: 4_096
         )
         let progress = IndexProgress(indexed: 120, total: 123, isComplete: false, failed: 2)
@@ -65,10 +68,13 @@ enum DiagnosticReportSmokeCheck {
         let text = String(decoding: data, as: UTF8.self)
         try require(!text.contains(privateMarker), "report excludes private identifiers and content")
         let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-        try require(object?["schemaVersion"] as? Int == 1, "schema version")
+        try require(object?["schemaVersion"] as? Int == 2, "schema version")
         try require(object?["archiveByteCount"] as? Int == 9_876_543, "archive size")
         try require(object?["messageEntries"] as? Int == 123, "message count")
         try require(object?["searchIndexedEntries"] as? Int == 120, "index progress")
+        try require(object?["recoveredMalformedMessageEntries"] as? Int == 1, "recovered XML count")
+        try require(object?["checksumFailureEntries"] as? Int == 4, "CRC failure count")
+        try require(object?["unsupportedCompressionEntries"] as? Int == 5, "compression diagnostic count")
         let privacy = object?["privacy"] as? [String: Any]
         try require(privacy?.values.allSatisfy { ($0 as? Bool) == false } == true, "privacy declaration")
         print("Privacy-preserving diagnostic report smoke check passed")

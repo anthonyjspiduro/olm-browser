@@ -14,4 +14,7 @@ int32_t olm_inflate_raw(
     size_t *output_length
 );
 
+/// Calculates the standard ZIP CRC-32 for a byte buffer.
+uint32_t olm_crc32(const uint8_t *input, size_t input_length);
+
 #endif

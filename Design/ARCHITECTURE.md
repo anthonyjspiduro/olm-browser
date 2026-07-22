@@ -35,13 +35,13 @@ folders    messages     attachments
 
 `OLMArchiveReading` is the narrow interface between the app and archive implementations. The production reader uses ZIP64 random access, imposes decompression limits, and surfaces corrupt entries without failing the whole archive.
 
-The first production implementation now includes a native central-directory reader with ZIP64 offsets, stored-entry reads, raw DEFLATE support through a minimal zlib bridge, encryption rejection, and per-entry expansion limits. It does not invoke `/usr/bin/unzip` or create a second expanded archive.
+The first production implementation now includes a native central-directory reader with ZIP64 offsets, stored-entry reads, raw DEFLATE support through a minimal zlib bridge, encryption rejection, and per-entry expansion limits. Every decoded stored or DEFLATE entry is checked against its central-directory CRC-32 before its bytes can reach parsing, preview, or export. A mismatch rejects only that entry; healthy entries remain independently readable. Compression methods other than stored and DEFLATE are never decoded and are counted from the central directory in archive diagnostics. It does not invoke `/usr/bin/unzip` or create a second expanded archive.
 
 The source URL must only be opened for reading. File access is retained using a security-scoped bookmark. The archive fingerprint combines file size, modification time, and central-directory metadata so a stale index is never silently reused.
 
 ### Parsing
 
-The OLM parser turns Outlook XML into normalized accounts, folders, messages, contacts, calendar items, and attachment references. Normalized message headers include sender, To/CC/BCC, sent and received dates, message ID, read/flag state, and attachment metadata. XML parsing is streaming rather than DOM-based. Message bodies are loaded lazily and cached under a bounded policy.
+The OLM parser turns Outlook XML into normalized accounts, folders, messages, contacts, calendar items, and attachment references. Normalized message headers include sender, To/CC/BCC, sent and received dates, message ID, read/flag state, and attachment metadata. XML parsing is streaming rather than DOM-based. If an entry is truncated or malformed after at least one recognized field inside an OLM message container, fields completed before the XML error are retained as a recovered message and counted separately. XML without a recognized message container and field remains unreadable; neither case stops adjacent messages from loading or indexing. Message bodies are loaded lazily and cached under a bounded policy.
 
 ### Indexing
 
@@ -79,9 +79,9 @@ The index schema stores folder ID, sent timestamp, attachment presence, and read
 
 ### Operations and export
 
-Archive opening and indexing run in cancelable tasks. The operations panel reports central-directory, message, attachment, duplicate-path, unreadable-message, index-progress, and cache-size counts. Rebuild clears the checkpoint and resumes indexing; Delete Cache removes indexed rows and compacts the disposable database.
+Archive opening and indexing run in cancelable tasks. The operations panel reports central-directory, message, attachment, duplicate-path, CRC-failure, unsupported-compression, recovered-malformed-message, unreadable-message, index-progress, and cache-size counts. Unsupported compression is known immediately from the central directory; CRC failures are recorded only when a bounded read of that entry is attempted. Rebuild clears the checkpoint and resumes indexing; Delete Cache removes indexed rows and compacts the disposable database.
 
-Diagnostic-report export is an explicit local Save action. The versioned JSON report contains only aggregate archive size, account/folder/message/attachment/duplicate/unreadable counts, search-index progress, cache size, generation time, and privacy declarations. It never includes the archive path or filename, account/folder names, message identifiers or content, participants, attachment names, payloads, or cache contents.
+Diagnostic-report export is an explicit local Save action. Schema version 2 contains only aggregate archive size, account/folder/message/attachment/duplicate/unreadable/recovered-malformed/CRC-failure/unsupported-compression counts, search-index progress, cache size, generation time, and privacy declarations. It never includes the archive path or filename, account/folder names, message identifiers or content, participants, attachment names, payloads, CRC values, or cache contents.
 
 Message export is explicit and local. Plain-text, JSON, PDF, and CSV exports include normalized headers and body content. PDF generation uses local Core Graphics/Core Text layout and never renders remote HTML. CSV follows RFC-style quote escaping and prefixes spreadsheet formula-leading cells with an apostrophe. RFC 822 `.eml` export preserves participant/message headers, creates multipart plain/HTML content, and includes only resolved, size-bounded attachments.
 
@@ -101,7 +101,7 @@ AI features operate on an explicit selection or query result set. Every generate
 
 ## Failure model
 
-A malformed message, attachment, or folder must be isolated as an entry-level diagnostic. The app preserves all successfully browsable content and offers a privacy-preserving aggregate diagnostic report. Disk exhaustion pauses indexing without compromising the source archive.
+A malformed message, attachment, or folder must be isolated as an entry-level diagnostic. CRC mismatches and unsupported compression reject only the affected entry. Completed fields from a partially malformed OLM message may be recovered, clearly counted apart from fully parsed and unreadable entries. The app preserves all successfully browsable content and offers a privacy-preserving aggregate diagnostic report. Disk exhaustion pauses indexing without compromising the source archive.
 
 ## Delivery phases
 

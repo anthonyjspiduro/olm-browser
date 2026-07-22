@@ -8,7 +8,7 @@ enum DiagnosticReportExporter {
         generatedAt: Date = Date()
     ) throws -> Data {
         let report = Report(
-            schemaVersion: 1,
+            schemaVersion: 2,
             generatedAt: generatedAt,
             archiveByteCount: snapshot.identity.size,
             accountCount: snapshot.accounts.count,
@@ -19,6 +19,9 @@ enum DiagnosticReportExporter {
             attachmentPayloadEntries: status.attachmentEntries,
             duplicateZIPPaths: status.duplicateEntryPaths,
             unreadableMessageEntries: status.failedMessageEntries,
+            recoveredMalformedMessageEntries: status.recoveredMalformedMessageEntries,
+            checksumFailureEntries: status.checksumFailureEntries,
+            unsupportedCompressionEntries: status.unsupportedCompressionEntries,
             searchIndexedEntries: indexProgress.indexed,
             searchTotalEntries: indexProgress.total,
             searchUnreadableEntries: indexProgress.failed,
@@ -49,6 +52,9 @@ enum DiagnosticReportExporter {
         let attachmentPayloadEntries: Int
         let duplicateZIPPaths: Int
         let unreadableMessageEntries: Int
+        let recoveredMalformedMessageEntries: Int
+        let checksumFailureEntries: Int
+        let unsupportedCompressionEntries: Int
         let searchIndexedEntries: Int
         let searchTotalEntries: Int
         let searchUnreadableEntries: Int

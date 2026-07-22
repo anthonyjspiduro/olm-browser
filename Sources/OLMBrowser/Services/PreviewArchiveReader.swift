@@ -165,7 +165,7 @@ struct PreviewArchiveReader: OLMArchiveReading {
     }
 
     func operationalStatus() -> ArchiveOperationalStatus {
-        ArchiveOperationalStatus(archiveEntries: 0, messageEntries: 0, attachmentEntries: 0, duplicateEntryPaths: 0, failedMessageEntries: 0, cacheByteCount: 0)
+        ArchiveOperationalStatus(archiveEntries: 0, messageEntries: 0, attachmentEntries: 0, duplicateEntryPaths: 0, failedMessageEntries: 0, recoveredMalformedMessageEntries: 0, checksumFailureEntries: 0, unsupportedCompressionEntries: 0, cacheByteCount: 0)
     }
     func folderUnreadCounts() -> [MailFolder.ID: Int]? {
         ["preview-inbox": 38, "preview-sent": 0, "preview-projects": 5]

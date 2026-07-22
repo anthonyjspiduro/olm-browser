@@ -37,6 +37,9 @@ enum ArchiveSmokeCheck {
         print("Paging check: \(firstPage) unique messages across two pages")
         print("Attachment payload entries: \(status.attachmentEntries)")
         print("Duplicate ZIP paths: \(status.duplicateEntryPaths)")
+        print("Recovered malformed messages: \(status.recoveredMalformedMessageEntries)")
+        print("Encountered CRC failures: \(status.checksumFailureEntries)")
+        print("Unsupported compression entries: \(status.unsupportedCompressionEntries)")
         print("Aggregate diagnostic report privacy check passed")
     }
 
@@ -71,13 +74,14 @@ private final class NativeOLMArchiveReaderCheck {
         let malformed = attachments.filter { $0.diagnostic == .malformedReference }.count
         let duplicate = attachments.filter { $0.diagnostic == .duplicatePayload }.count
         let oversized = attachments.filter { if case .oversized = $0.diagnostic { true } else { false } }.count
+        let unsupported = attachments.filter { if case .unsupportedCompression = $0.diagnostic { true } else { false } }.count
         if let attachment = available.first {
             let data = try reader.attachmentData(for: attachment)
             guard Int64(data.count) == attachment.byteCount else {
                 throw CheckFailure("Resolved attachment size did not match its ZIP entry")
             }
         }
-        print("Paging attachment diagnostics: total=\(attachments.count), available=\(available.count), missing=\(missing), malformed=\(malformed), duplicate=\(duplicate), oversized=\(oversized)")
+        print("Paging attachment diagnostics: total=\(attachments.count), available=\(available.count), missing=\(missing), malformed=\(malformed), duplicate=\(duplicate), oversized=\(oversized), unsupported=\(unsupported)")
         return ids.count
     }
 }

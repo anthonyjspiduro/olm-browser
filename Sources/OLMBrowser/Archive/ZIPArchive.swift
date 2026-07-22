@@ -8,6 +8,7 @@ enum ZIPArchiveError: LocalizedError {
     case entryTooLarge(UInt64)
     case truncatedEntry
     case decompressionFailed(Int32)
+    case checksumMismatch(expected: UInt32, actual: UInt32)
     case cancelled
 
     var errorDescription: String? {
@@ -18,6 +19,8 @@ enum ZIPArchiveError: LocalizedError {
         case .entryTooLarge(let size): "The requested entry is too large to preview (\(size) bytes)."
         case .truncatedEntry: "The ZIP entry ended unexpectedly."
         case .decompressionFailed(let code): "The ZIP entry could not be decompressed (zlib \(code))."
+        case .checksumMismatch(let expected, let actual):
+            "The ZIP entry failed its CRC-32 integrity check (expected \(String(format: "%08X", expected)), got \(String(format: "%08X", actual)))."
         case .cancelled: "Opening the archive was cancelled."
         }
     }
@@ -77,17 +80,25 @@ final class ZIPArchive: @unchecked Sendable {
             throw ZIPArchiveError.truncatedEntry
         }
 
+        let result: Data
         switch entry.compressionMethod {
         case 0:
             guard compressed.count == Int(entry.uncompressedSize) else {
                 throw ZIPArchiveError.truncatedEntry
             }
-            return compressed
+            result = compressed
         case 8:
-            return try inflate(compressed, outputSize: Int(entry.uncompressedSize))
+            result = try inflate(compressed, outputSize: Int(entry.uncompressedSize))
         default:
             throw ZIPArchiveError.unsupportedCompression(entry.compressionMethod)
         }
+        let actualCRC = result.withUnsafeBytes { buffer in
+            olm_crc32(buffer.bindMemory(to: UInt8.self).baseAddress, result.count)
+        }
+        guard actualCRC == entry.crc32 else {
+            throw ZIPArchiveError.checksumMismatch(expected: entry.crc32, actual: actualCRC)
+        }
+        return result
     }
 
     private func inflate(_ compressed: Data, outputSize: Int) throws -> Data {

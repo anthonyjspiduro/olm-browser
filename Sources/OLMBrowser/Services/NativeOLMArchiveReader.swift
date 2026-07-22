@@ -11,6 +11,8 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
     private var folderByEntryPath: [String: MailFolder.ID] = [:]
     private var searchIndex: OLMSearchIndex?
     private var failedMessageEntryPaths: Set<String> = []
+    private var recoveredMessageEntryPaths: Set<String> = []
+    private var checksumFailureEntryPaths: Set<String> = []
 
     func openArchive(at url: URL) throws -> ArchiveSnapshot {
         let resourceValues = try url.resourceValues(forKeys: [
@@ -55,6 +57,8 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
             folderByEntryPath = folderLookup
             searchIndex = openedIndex
             failedMessageEntryPaths = []
+            recoveredMessageEntryPaths = []
+            checksumFailureEntryPaths = []
         }
 
         return ArchiveSnapshot(
@@ -176,7 +180,12 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
         guard let archive = state.0, state.1.count == 1, let entry = state.1.first else {
             throw AttachmentAccessError.unavailable("The attachment payload is not uniquely available.")
         }
-        return try archive.data(for: entry, maximumSize: Self.maximumAttachmentSize)
+        do {
+            return try archive.data(for: entry, maximumSize: Self.maximumAttachmentSize)
+        } catch {
+            recordArchiveReadFailure(error, entryPath: entry.path)
+            throw error
+        }
     }
 
     func operationalStatus() -> ArchiveOperationalStatus {
@@ -188,6 +197,11 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
                 attachmentEntries: entries.count { $0.path.contains("/com.microsoft.__Attachments/") && !$0.isDirectory },
                 duplicateEntryPaths: allEntriesByPath.values.count { $0.count > 1 },
                 failedMessageEntries: failedMessageEntryPaths.count,
+                recoveredMalformedMessageEntries: recoveredMessageEntryPaths.count,
+                checksumFailureEntries: checksumFailureEntryPaths.count,
+                unsupportedCompressionEntries: entries.count {
+                    $0.compressionMethod != 0 && $0.compressionMethod != 8
+                },
                 cacheByteCount: searchIndex?.cacheByteCount ?? 0
             )
         }
@@ -214,15 +228,38 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
         parser: OLMMessageParser
     ) -> MessageSummary? {
         autoreleasepool {
-            guard let data = try? archive.data(for: entry, maximumSize: 32 * 1_024 * 1_024) else {
+            let data: Data
+            do {
+                data = try archive.data(for: entry, maximumSize: 32 * 1_024 * 1_024)
+            } catch {
+                recordArchiveReadFailure(error, entryPath: entry.path)
                 stateLock.withLock { _ = failedMessageEntryPaths.insert(entry.path) }
                 return nil
             }
-            guard let parsed = parser.parse(data: data, entryPath: entry.path, folderID: folderID) else {
+            let parsed: MessageSummary
+            switch parser.parseOutcome(data: data, entryPath: entry.path, folderID: folderID) {
+            case .parsed(let message):
+                parsed = message
+            case .recovered(let message):
+                stateLock.withLock { _ = recoveredMessageEntryPaths.insert(entry.path) }
+                parsed = message
+            case .failed:
                 stateLock.withLock { _ = failedMessageEntryPaths.insert(entry.path) }
                 return nil
             }
             return resolvingAttachments(in: parsed, messageEntry: entry)
+        }
+    }
+
+    private func recordArchiveReadFailure(_ error: Error, entryPath: String) {
+        guard let zipError = error as? ZIPArchiveError else { return }
+        stateLock.withLock {
+            switch zipError {
+            case .checksumMismatch:
+                _ = checksumFailureEntryPaths.insert(entryPath)
+            default:
+                break
+            }
         }
     }
 
@@ -256,11 +293,18 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
                 diagnostic = .duplicatePayload
                 resolvedPath = nil
                 actualSize = attachment.byteCount
+            } else if let entry = candidates.first, entry.isDirectory {
+                diagnostic = .malformedReference
+                resolvedPath = nil
+                actualSize = attachment.byteCount
             } else if let entry = candidates.first,
-                      entry.isDirectory || entry.uncompressedSize > Self.maximumAttachmentSize {
-                diagnostic = entry.isDirectory
-                    ? .malformedReference
-                    : .oversized(limit: Int64(Self.maximumAttachmentSize))
+                      entry.compressionMethod != 0 && entry.compressionMethod != 8 {
+                diagnostic = .unsupportedCompression(method: entry.compressionMethod)
+                resolvedPath = nil
+                actualSize = Int64(clamping: entry.uncompressedSize)
+            } else if let entry = candidates.first,
+                      entry.uncompressedSize > Self.maximumAttachmentSize {
+                diagnostic = .oversized(limit: Int64(Self.maximumAttachmentSize))
                 resolvedPath = nil
                 actualSize = Int64(clamping: entry.uncompressedSize)
             } else {

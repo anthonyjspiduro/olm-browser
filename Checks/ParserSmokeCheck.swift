@@ -62,7 +62,32 @@ enum ParserSmokeCheck {
         try require(message.attachments.first?.contentID == "schedule@example.invalid", "attachment content ID")
         try require(message.attachments.first?.archiveEntryPath?.hasSuffix("schedule_0000") == true, "attachment URL")
 
-        print("Parser smoke check passed")
+        let truncatedXML = """
+        <emails><email>
+          <OPFMessageCopySubject>Recoverable subject</OPFMessageCopySubject>
+          <OPFMessageCopyBody>Incomplete body
+        """
+        switch OLMMessageParser().parseOutcome(
+            data: Data(truncatedXML.utf8),
+            entryPath: "synthetic/recovered.xml",
+            folderID: "synthetic::Inbox"
+        ) {
+        case .recovered(let recovered):
+            try require(recovered.subject == "Recoverable subject", "recovered malformed XML metadata")
+        default:
+            throw CheckFailure("Parser did not recover fields preceding truncated XML")
+        }
+
+        switch OLMMessageParser().parseOutcome(
+            data: Data("<not-a-message>broken".utf8),
+            entryPath: "synthetic/unrecoverable.xml",
+            folderID: "synthetic::Inbox"
+        ) {
+        case .failed: break
+        default: throw CheckFailure("Parser accepted malformed XML without OLM message fields")
+        }
+
+        print("Parser and malformed-XML recovery smoke checks passed")
     }
 
     private static func require(_ condition: @autoclosure () -> Bool, _ field: String) throws {

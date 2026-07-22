@@ -33,3 +33,14 @@ int32_t olm_inflate_raw(
 
     return result == Z_STREAM_END ? Z_OK : result;
 }
+
+uint32_t olm_crc32(const uint8_t *input, size_t input_length) {
+    uLong checksum = crc32(0L, Z_NULL, 0);
+    while (input_length > 0) {
+        uInt chunk_length = input_length > UINT_MAX ? UINT_MAX : (uInt)input_length;
+        checksum = crc32(checksum, input, chunk_length);
+        input += chunk_length;
+        input_length -= chunk_length;
+    }
+    return (uint32_t)checksum;
+}

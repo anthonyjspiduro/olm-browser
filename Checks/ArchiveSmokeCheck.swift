@@ -21,6 +21,15 @@ enum ArchiveSmokeCheck {
         print("Folders: \(snapshot.folders.count)")
         print("Cataloged messages: \(snapshot.folders.reduce(0) { $0 + $1.messageCount })")
         print("Paging check: \(firstPage) unique messages across two pages")
+        let status = readerStatus(readerURL: url)
+        print("Attachment payload entries: \(status.attachmentEntries)")
+        print("Duplicate ZIP paths: \(status.duplicateEntryPaths)")
+    }
+
+    private static func readerStatus(readerURL: URL) -> ArchiveOperationalStatus {
+        let reader = NativeOLMArchiveReader()
+        _ = try? reader.openArchive(at: readerURL)
+        return reader.operationalStatus()
     }
 }
 
@@ -38,6 +47,19 @@ private final class NativeOLMArchiveReaderCheck {
             throw CheckFailure("Paging returned duplicate or incorrect offsets")
         }
         print("HTML messages in paging sample: \(combined.filter { $0.htmlBody != nil }.count)")
+        let attachments = combined.flatMap(\.attachments)
+        let available = attachments.filter(\.isAvailable)
+        let missing = attachments.filter { $0.diagnostic == .missingPayload }.count
+        let malformed = attachments.filter { $0.diagnostic == .malformedReference }.count
+        let duplicate = attachments.filter { $0.diagnostic == .duplicatePayload }.count
+        let oversized = attachments.filter { if case .oversized = $0.diagnostic { true } else { false } }.count
+        if let attachment = available.first {
+            let data = try reader.attachmentData(for: attachment)
+            guard Int64(data.count) == attachment.byteCount else {
+                throw CheckFailure("Resolved attachment size did not match its ZIP entry")
+            }
+        }
+        print("Paging attachment diagnostics: total=\(attachments.count), available=\(available.count), missing=\(missing), malformed=\(malformed), duplicate=\(duplicate), oversized=\(oversized)")
         return ids.count
     }
 }

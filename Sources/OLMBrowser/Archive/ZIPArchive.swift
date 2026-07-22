@@ -8,6 +8,7 @@ enum ZIPArchiveError: LocalizedError {
     case entryTooLarge(UInt64)
     case truncatedEntry
     case decompressionFailed(Int32)
+    case cancelled
 
     var errorDescription: String? {
         switch self {
@@ -17,6 +18,7 @@ enum ZIPArchiveError: LocalizedError {
         case .entryTooLarge(let size): "The requested entry is too large to preview (\(size) bytes)."
         case .truncatedEntry: "The ZIP entry ended unexpectedly."
         case .decompressionFailed(let code): "The ZIP entry could not be decompressed (zlib \(code))."
+        case .cancelled: "Opening the archive was cancelled."
         }
     }
 }
@@ -163,6 +165,7 @@ final class ZIPArchive: @unchecked Sendable {
         result.reserveCapacity(Int(min(entryCount, UInt64(Int.max))))
         var cursor = 0
         while cursor + 46 <= directory.count && UInt64(result.count) < entryCount {
+            if result.count.isMultiple(of: 1_000), Task.isCancelled { throw ZIPArchiveError.cancelled }
             guard directory.uint32LE(at: cursor) == 0x02014b50 else {
                 throw ZIPArchiveError.invalidArchive("invalid central-directory entry at offset \(cursor)")
             }

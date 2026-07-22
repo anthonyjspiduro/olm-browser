@@ -14,6 +14,17 @@ struct MessageListView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
+                if !store.searchText.isEmpty {
+                    Toggle("This Folder", isOn: $store.isSearchFolderScoped)
+                        .toggleStyle(.checkbox)
+                        .onChange(of: store.isSearchFolderScoped) { store.searchOptionsChanged() }
+                    Picker("Sort", selection: $store.searchSort) {
+                        ForEach(SearchSort.allCases) { sort in Text(sort.label).tag(sort) }
+                    }
+                    .labelsHidden()
+                    .frame(width: 125)
+                    .onChange(of: store.searchSort) { store.searchOptionsChanged() }
+                }
                 if !store.indexProgress.isComplete {
                     VStack(alignment: .trailing, spacing: 3) {
                         Text("Indexing search")
@@ -65,7 +76,9 @@ struct MessageListView: View {
         }
         if !store.searchText.isEmpty {
             let suffix = store.indexProgress.isComplete ? "" : " · index still building"
-            return "\(count) results\(suffix)"
+            let total = store.searchResultTotal
+            let prefix = total > count ? "Showing \(count.formatted()) of \(total.formatted())" : "\(count.formatted()) results"
+            return "\(prefix)\(suffix)"
         }
         if store.searchText.isEmpty,
            let total = store.selectedFolder?.messageCount,

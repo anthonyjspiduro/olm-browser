@@ -9,6 +9,9 @@ struct OLMBrowserApp: App {
             RootView()
                 .environmentObject(store)
                 .frame(minWidth: 940, minHeight: 620)
+                .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+                    store.applicationWillTerminate()
+                }
         }
         .defaultSize(width: 1240, height: 780)
         .commands {

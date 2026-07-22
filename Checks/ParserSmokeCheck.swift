@@ -23,7 +23,9 @@ enum ParserSmokeCheck {
             <messageAttachment
               OPFAttachmentName="Schedule.pdf"
               OPFAttachmentContentFileSize="2048"
-              OPFAttachmentContentType="application/pdf" />
+              OPFAttachmentContentType="application/pdf"
+              OPFAttachmentContentID="schedule@example.invalid"
+              OPFAttachmentURL="Accounts/archive/com.microsoft.__Messages/Inbox/com.microsoft.__Attachments/schedule_0000" />
           </OPFMessageCopyAttachmentList>
         </email></emails>
         """
@@ -46,6 +48,8 @@ enum ParserSmokeCheck {
         try require(message.isFlagged, "flag state")
         try require(message.attachments.first?.filename == "Schedule.pdf", "attachment name")
         try require(message.attachments.first?.byteCount == 2_048, "attachment size")
+        try require(message.attachments.first?.contentID == "schedule@example.invalid", "attachment content ID")
+        try require(message.attachments.first?.archiveEntryPath?.hasSuffix("schedule_0000") == true, "attachment URL")
 
         print("Parser smoke check passed")
     }

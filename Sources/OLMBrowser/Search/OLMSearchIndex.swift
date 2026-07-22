@@ -19,6 +19,7 @@ final class OLMSearchIndex: @unchecked Sendable {
     private var database: OpaquePointer?
     private var insertStatement: OpaquePointer?
     private let lock = NSLock()
+    private let databaseURL: URL
 
     init(archiveURL: URL, fileSize: Int64, modifiedAt: Date?) throws {
         let cacheRoot = try Self.cacheDirectory()
@@ -26,6 +27,7 @@ final class OLMSearchIndex: @unchecked Sendable {
             "\(archiveURL.standardizedFileURL.path)|\(fileSize)|\(modifiedAt?.timeIntervalSince1970 ?? 0)"
         )
         let databaseURL = cacheRoot.appendingPathComponent("\(fingerprint).sqlite")
+        self.databaseURL = databaseURL
 
         var handle: OpaquePointer?
         let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX
@@ -40,9 +42,18 @@ final class OLMSearchIndex: @unchecked Sendable {
         try execute("PRAGMA journal_mode=WAL;")
         try execute("PRAGMA synchronous=NORMAL;")
         try execute("CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);")
+        if metadataValue(for: "schema_version") != "2" {
+            try execute("DROP TABLE IF EXISTS message_search;")
+            try setMetadataValue("0", for: "next_entry_offset")
+            try setMetadataValue("0", for: "complete")
+            try setMetadataValue("2", for: "schema_version")
+        }
         try execute("""
             CREATE VIRTUAL TABLE IF NOT EXISTS message_search USING fts5(
                 entry_path UNINDEXED,
+                folder_id UNINDEXED,
+                sent_at UNINDEXED,
+                has_attachment UNINDEXED,
                 subject,
                 sender,
                 recipients,
@@ -55,8 +66,8 @@ final class OLMSearchIndex: @unchecked Sendable {
 
         let insertSQL = """
             INSERT INTO message_search
-                (entry_path, subject, sender, recipients, preview, body, attachments)
-            VALUES (?, ?, ?, ?, ?, ?, ?);
+                (entry_path, folder_id, sent_at, has_attachment, subject, sender, recipients, preview, body, attachments)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """
         guard sqlite3_prepare_v2(handle, insertSQL, -1, &insertStatement, nil) == SQLITE_OK else {
             throw SearchIndexError.operationFailed(String(cString: sqlite3_errmsg(handle)))
@@ -90,6 +101,9 @@ final class OLMSearchIndex: @unchecked Sendable {
             let attachmentNames = message.attachments.map(\.filename).joined(separator: " ")
             let values = [
                 entryPath,
+                message.folderID,
+                String(message.sentAt.timeIntervalSince1970),
+                message.attachments.isEmpty ? "0" : "1",
                 message.subject,
                 "\(message.sender.label) \(message.sender.address)",
                 message.recipients.map { "\($0.label) \($0.address)" }.joined(separator: " "),
@@ -118,20 +132,95 @@ final class OLMSearchIndex: @unchecked Sendable {
         lock.withLock { try? execute("ROLLBACK;") }
     }
 
-    func searchPaths(matching query: String, limit: Int) throws -> [String] {
+    func reset(compact: Bool) throws {
         try lock.withLock {
-            guard let database else { return [] }
-            let expression = Self.ftsExpression(for: query)
-            guard !expression.isEmpty else { return [] }
-            let sql = "SELECT entry_path FROM message_search WHERE message_search MATCH ? ORDER BY rank LIMIT ?;"
+            try execute("BEGIN IMMEDIATE TRANSACTION;")
+            do {
+                try execute("DELETE FROM message_search;")
+                try setMetadataValue("0", for: "next_entry_offset")
+                try setMetadataValue("0", for: "complete")
+                try execute("COMMIT;")
+                if compact { try execute("VACUUM;") }
+            } catch {
+                try? execute("ROLLBACK;")
+                throw error
+            }
+        }
+    }
+
+    var cacheByteCount: Int64 {
+        lock.withLock {
+            [databaseURL, URL(fileURLWithPath: databaseURL.path + "-wal"), URL(fileURLWithPath: databaseURL.path + "-shm")]
+                .reduce(Int64(0)) { total, url in
+                    let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+                    return total + Int64(size)
+                }
+        }
+    }
+
+    func searchPaths(
+        matching query: String,
+        folderID: String?,
+        offset: Int,
+        limit: Int,
+        sort: SearchSort
+    ) throws -> SearchPathPage {
+        try lock.withLock {
+            guard let database else { return SearchPathPage(paths: [], nextOffset: 0, totalCount: 0) }
+            let parsed = SearchTerms(query)
+            var predicates: [String] = []
+            var bindings: [String] = []
+            let expression = Self.ftsExpression(for: parsed.terms.joined(separator: " "))
+            if !expression.isEmpty {
+                predicates.append("message_search MATCH ?")
+                bindings.append(expression)
+            }
+            if let sender = parsed.sender {
+                predicates.append("sender LIKE ? ESCAPE '\\' COLLATE NOCASE")
+                bindings.append("%\(Self.likePattern(sender))%")
+            }
+            if let recipient = parsed.recipient {
+                predicates.append("recipients LIKE ? ESCAPE '\\' COLLATE NOCASE")
+                bindings.append("%\(Self.likePattern(recipient))%")
+            }
+            if let scopedFolder = folderID {
+                predicates.append("folder_id = ?")
+                bindings.append(scopedFolder)
+            } else if let folder = parsed.folder {
+                predicates.append("folder_id LIKE ? ESCAPE '\\' COLLATE NOCASE")
+                bindings.append("%\(Self.likePattern(folder))%")
+            }
+            if let after = parsed.after {
+                predicates.append("CAST(sent_at AS REAL) >= ?")
+                bindings.append(String(after.timeIntervalSince1970))
+            }
+            if let before = parsed.before {
+                predicates.append("CAST(sent_at AS REAL) < ?")
+                bindings.append(String(before.timeIntervalSince1970))
+            }
+            if parsed.hasAttachment {
+                predicates.append("has_attachment = '1'")
+            }
+            guard !predicates.isEmpty else { return SearchPathPage(paths: [], nextOffset: 0, totalCount: 0) }
+            let whereSQL = predicates.joined(separator: " AND ")
+            let orderSQL: String
+            switch sort {
+            case .relevance where !expression.isEmpty: orderSQL = "rank"
+            case .oldest: orderSQL = "CAST(sent_at AS REAL) ASC"
+            default: orderSQL = "CAST(sent_at AS REAL) DESC"
+            }
+            let sql = "SELECT entry_path FROM message_search WHERE \(whereSQL) ORDER BY \(orderSQL) LIMIT ? OFFSET ?;"
             var statement: OpaquePointer?
             guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
                   let statement else {
                 throw SearchIndexError.operationFailed(String(cString: sqlite3_errmsg(database)))
             }
             defer { sqlite3_finalize(statement) }
-            sqlite3_bind_text(statement, 1, expression, -1, Self.transient)
-            sqlite3_bind_int(statement, 2, Int32(limit))
+            for (index, value) in bindings.enumerated() {
+                sqlite3_bind_text(statement, Int32(index + 1), value, -1, Self.transient)
+            }
+            sqlite3_bind_int(statement, Int32(bindings.count + 1), Int32(max(1, limit)))
+            sqlite3_bind_int(statement, Int32(bindings.count + 2), Int32(max(0, offset)))
 
             var paths: [String] = []
             while sqlite3_step(statement) == SQLITE_ROW {
@@ -139,7 +228,18 @@ final class OLMSearchIndex: @unchecked Sendable {
                     paths.append(String(cString: text))
                 }
             }
-            return paths
+            var countStatement: OpaquePointer?
+            let countSQL = "SELECT COUNT(*) FROM message_search WHERE \(whereSQL);"
+            guard sqlite3_prepare_v2(database, countSQL, -1, &countStatement, nil) == SQLITE_OK,
+                  let countStatement else {
+                throw SearchIndexError.operationFailed(String(cString: sqlite3_errmsg(database)))
+            }
+            defer { sqlite3_finalize(countStatement) }
+            for (index, value) in bindings.enumerated() {
+                sqlite3_bind_text(countStatement, Int32(index + 1), value, -1, Self.transient)
+            }
+            let total = sqlite3_step(countStatement) == SQLITE_ROW ? Int(sqlite3_column_int64(countStatement, 0)) : paths.count
+            return SearchPathPage(paths: paths, nextOffset: min(max(0, offset) + paths.count, total), totalCount: total)
         }
     }
 
@@ -196,6 +296,12 @@ final class OLMSearchIndex: @unchecked Sendable {
             .joined(separator: " AND ")
     }
 
+    private static func likePattern(_ value: String) -> String {
+        value.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "%", with: "\\%")
+            .replacingOccurrences(of: "_", with: "\\_")
+    }
+
     private static func fingerprint(_ value: String) -> String {
         var hash: UInt64 = 14_695_981_039_346_656_037
         for byte in value.utf8 {
@@ -206,6 +312,65 @@ final class OLMSearchIndex: @unchecked Sendable {
     }
 
     private static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+}
+
+struct SearchPathPage: Sendable {
+    let paths: [String]
+    let nextOffset: Int
+    let totalCount: Int
+}
+
+private struct SearchTerms {
+    var terms: [String] = []
+    var sender: String?
+    var recipient: String?
+    var folder: String?
+    var after: Date?
+    var before: Date?
+    var hasAttachment = false
+
+    init(_ query: String) {
+        for token in Self.tokens(query) {
+            let pair = token.split(separator: ":", maxSplits: 1).map(String.init)
+            guard pair.count == 2 else { terms.append(token); continue }
+            let key = pair[0].lowercased()
+            let value = pair[1].trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+            switch key {
+            case "from" where !value.isEmpty: sender = value
+            case "to" where !value.isEmpty: recipient = value
+            case "folder" where !value.isEmpty: folder = value
+            case "after": after = Self.date(value)
+            case "before": before = Self.date(value)
+            case "has" where value.lowercased() == "attachment": hasAttachment = true
+            default: terms.append(token)
+            }
+        }
+    }
+
+    private static func tokens(_ value: String) -> [String] {
+        var result: [String] = []
+        var current = ""
+        var quote: Character?
+        for character in value {
+            if character == "\"" || character == "'" {
+                if quote == character { quote = nil }
+                else if quote == nil { quote = character }
+                else { current.append(character) }
+            } else if character.isWhitespace && quote == nil {
+                if !current.isEmpty { result.append(current); current = "" }
+            } else { current.append(character) }
+        }
+        if !current.isEmpty { result.append(current) }
+        return result
+    }
+
+    private static func date(_ value: String) -> Date? {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.date(from: value)
+    }
 }
 
 private extension NSLock {

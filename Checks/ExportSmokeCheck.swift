@@ -1,0 +1,50 @@
+import Foundation
+
+@main
+enum ExportSmokeCheck {
+    static func main() throws {
+        let attachment = AttachmentSummary(
+            id: "a1", filename: "../unsafe:name.txt", byteCount: 5,
+            contentType: "text/plain", contentID: "inline@example.invalid", archiveEntryPath: "payload"
+        )
+        let message = MessageSummary(
+            id: "m1", folderID: "account::Inbox", subject: "Synthetic subject",
+            sender: MailParticipant(name: "Sender", address: "sender@example.invalid"),
+            recipients: [MailParticipant(name: "Recipient", address: "recipient@example.invalid")],
+            sentAt: Date(timeIntervalSince1970: 1_700_000_000), preview: "Synthetic preview",
+            body: "Synthetic body", htmlBody: "<p>Synthetic body</p>", isRead: true,
+            isFlagged: false, attachments: [attachment]
+        )
+        let reader = SyntheticReader()
+        let text = try MessageExporter.data(for: message, format: .plainText, reader: reader)
+        let json = try MessageExporter.data(for: message, format: .json, reader: reader)
+        let eml = try MessageExporter.data(for: message, format: .eml, reader: reader)
+        try require(String(data: text, encoding: .utf8)?.contains("Synthetic body") == true, "text export")
+        let jsonObject = try JSONSerialization.jsonObject(with: json)
+        try require(jsonObject is [String: Any], "JSON export")
+        try require(String(data: eml, encoding: .utf8)?.contains("multipart/mixed") == true, "EML export")
+        try require(AttachmentFileStore.safeFilename(attachment.filename) == "unsafe-name.txt", "safe filename")
+        print("Message and attachment export smoke check passed")
+    }
+
+    private static func require(_ value: @autoclosure () -> Bool, _ label: String) throws {
+        guard value() else { throw Failure("Failed \(label)") }
+    }
+}
+
+private struct SyntheticReader: OLMArchiveReading {
+    func openArchive(at url: URL) throws -> ArchiveSnapshot { throw Failure("unused") }
+    func loadMessages(in folderID: String, offset: Int, limit: Int) throws -> MessagePage { MessagePage(messages: [], nextOffset: 0, totalCount: 0) }
+    func buildSearchIndex(progress: @escaping @Sendable (IndexProgress) -> Void) throws {}
+    func searchMessages(matching query: String, folderID: String?, offset: Int, limit: Int, sort: SearchSort) throws -> MessagePage { MessagePage(messages: [], nextOffset: 0, totalCount: 0) }
+    func attachmentData(for attachment: AttachmentSummary) throws -> Data { Data("hello".utf8) }
+    func operationalStatus() -> ArchiveOperationalStatus { ArchiveOperationalStatus(archiveEntries: 0, messageEntries: 0, attachmentEntries: 0, duplicateEntryPaths: 0, failedMessageEntries: 0, cacheByteCount: 0) }
+    func resetSearchIndex() throws {}
+    func deleteSearchCache() throws {}
+}
+
+private struct Failure: LocalizedError {
+    let message: String
+    init(_ message: String) { self.message = message }
+    var errorDescription: String? { message }
+}

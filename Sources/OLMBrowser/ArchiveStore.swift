@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import UniformTypeIdentifiers
 
 @MainActor
 final class ArchiveStore: ObservableObject {
@@ -7,6 +8,8 @@ final class ArchiveStore: ObservableObject {
     @Published var selectedFolderID: MailFolder.ID?
     @Published var selectedMessageID: MessageSummary.ID?
     @Published var searchText = ""
+    @Published var searchSort: SearchSort = .relevance
+    @Published var isSearchFolderScoped = false
     @Published var errorMessage: String?
     @Published private(set) var isOpening = false
     @Published private(set) var isLoadingPage = false
@@ -14,13 +17,20 @@ final class ArchiveStore: ObservableObject {
     @Published private(set) var messages: [MessageSummary] = []
     @Published private(set) var searchResults: [MessageSummary] = []
     @Published private(set) var indexProgress = IndexProgress(indexed: 0, total: 0, isComplete: false)
+    @Published private(set) var inlineImages: [String: String] = [:]
+    @Published private(set) var operationalStatus: ArchiveOperationalStatus?
 
     private let reader: any OLMArchiveReading
     private let pageSize = 100
     private var nextPageOffset = 0
     private var totalMessagesInFolder = 0
+    private var nextSearchOffset = 0
+    private var totalSearchResults = 0
     private var searchTask: Task<Void, Never>?
     private var indexTask: Task<Void, Never>?
+    private var openTask: Task<Void, Never>?
+    private var inlineImageTask: Task<Void, Never>?
+    private let attachmentFiles = AttachmentFileStore()
 
     init(reader: any OLMArchiveReading = NativeOLMArchiveReader()) {
         self.reader = reader
@@ -41,7 +51,9 @@ final class ArchiveStore: ObservableObject {
     }
 
     var hasMoreMessages: Bool {
-        searchText.isEmpty && nextPageOffset < totalMessagesInFolder
+        searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? nextPageOffset < totalMessagesInFolder
+            : nextSearchOffset < totalSearchResults
     }
 
     func presentOpenPanel() {
@@ -62,11 +74,16 @@ final class ArchiveStore: ObservableObject {
         errorMessage = nil
         let reader = reader
 
-        Task {
+        openTask?.cancel()
+        openTask = Task {
+            let worker = Task.detached(priority: .userInitiated) { try reader.openArchive(at: url) }
             do {
-                let loaded = try await Task.detached(priority: .userInitiated) {
-                    try reader.openArchive(at: url)
-                }.value
+                let loaded = try await withTaskCancellationHandler {
+                    try await worker.value
+                } onCancel: {
+                    worker.cancel()
+                }
+                guard !Task.isCancelled else { isOpening = false; return }
                 snapshot = loaded
                 searchText = ""
                 selectedFolderID = loaded.folders.first(where: { $0.kind == .inbox })?.id
@@ -75,10 +92,16 @@ final class ArchiveStore: ObservableObject {
                 loadNextPage()
                 startIndexing()
             } catch {
-                errorMessage = error.localizedDescription
+                if !Task.isCancelled { errorMessage = error.localizedDescription }
             }
             isOpening = false
+            refreshOperationalStatus()
         }
+    }
+
+    func cancelOpening() {
+        openTask?.cancel()
+        isOpening = false
     }
 
     func folderSelectionChanged() {
@@ -90,6 +113,10 @@ final class ArchiveStore: ObservableObject {
     }
 
     func loadNextPage() {
+        if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            loadNextSearchPage()
+            return
+        }
         guard !isLoadingPage, hasMoreMessages || nextPageOffset == 0,
               let folderID = selectedFolderID else { return }
         isLoadingPage = true
@@ -122,35 +149,68 @@ final class ArchiveStore: ObservableObject {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else {
             searchResults = []
+            nextSearchOffset = 0
+            totalSearchResults = 0
             isSearching = false
             selectedMessageID = messages.first?.id
             return
         }
 
+        searchResults = []
+        nextSearchOffset = 0
+        totalSearchResults = 0
         isSearching = true
-        let reader = reader
         searchTask = Task {
             try? await Task.sleep(for: .milliseconds(300))
             guard !Task.isCancelled else { return }
-            do {
-                let results = try await Task.detached(priority: .userInitiated) {
-                    try reader.searchMessages(matching: query, limit: 500)
-                }.value
-                guard !Task.isCancelled, searchText.trimmingCharacters(in: .whitespacesAndNewlines) == query else {
-                    return
-                }
-                searchResults = results
-                selectedMessageID = results.first?.id
-            } catch {
-                if !Task.isCancelled { errorMessage = error.localizedDescription }
-            }
-            isSearching = false
+            await performSearch(query: query, offset: 0)
         }
     }
+
+    func searchOptionsChanged() {
+        guard !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        searchTextChanged()
+    }
+
+    private func loadNextSearchPage() {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty, !isSearching, !isLoadingPage, nextSearchOffset < totalSearchResults else { return }
+        isLoadingPage = true
+        searchTask = Task { await performSearch(query: query, offset: nextSearchOffset) }
+    }
+
+    private func performSearch(query: String, offset: Int) async {
+        let reader = reader
+        let scope = isSearchFolderScoped ? selectedFolderID : nil
+        let sort = searchSort
+        do {
+            let page = try await Task.detached(priority: .userInitiated) {
+                try reader.searchMessages(
+                    matching: query, folderID: scope, offset: offset, limit: 100, sort: sort
+                )
+            }.value
+            guard !Task.isCancelled,
+                  searchText.trimmingCharacters(in: .whitespacesAndNewlines) == query,
+                  searchSort == sort,
+                  (isSearchFolderScoped ? selectedFolderID : nil) == scope else { return }
+            if offset == 0 { searchResults = page.messages }
+            else { searchResults.append(contentsOf: page.messages) }
+            nextSearchOffset = page.nextOffset
+            totalSearchResults = page.totalCount
+            if offset == 0 { selectedMessageID = page.messages.first?.id }
+        } catch {
+            if !Task.isCancelled { errorMessage = error.localizedDescription }
+        }
+        isSearching = false
+        isLoadingPage = false
+    }
+
+    var searchResultTotal: Int { totalSearchResults }
 
     func closeArchive() {
         searchTask?.cancel()
         indexTask?.cancel()
+        inlineImageTask?.cancel()
         snapshot = nil
         selectedFolderID = nil
         selectedMessageID = nil
@@ -158,6 +218,188 @@ final class ArchiveStore: ObservableObject {
         messages = []
         searchResults = []
         resetPageState()
+        attachmentFiles.cleanupSession()
+    }
+
+    func applicationWillTerminate() {
+        openTask?.cancel()
+        searchTask?.cancel()
+        indexTask?.cancel()
+        inlineImageTask?.cancel()
+        attachmentFiles.cleanupSession()
+    }
+
+    func cancelIndexing() { indexTask?.cancel() }
+
+    func rebuildSearchIndex() {
+        indexTask?.cancel()
+        let reader = reader
+        Task {
+            do {
+                try await Task.detached(priority: .utility) { try reader.resetSearchIndex() }.value
+                indexProgress = IndexProgress(indexed: 0, total: snapshot?.folders.reduce(0) { $0 + $1.messageCount } ?? 0, isComplete: false)
+                startIndexing()
+            } catch { errorMessage = error.localizedDescription }
+            refreshOperationalStatus()
+        }
+    }
+
+    func deleteSearchCache() {
+        indexTask?.cancel()
+        let reader = reader
+        Task {
+            do {
+                try await Task.detached(priority: .utility) { try reader.deleteSearchCache() }.value
+                indexProgress = IndexProgress(indexed: 0, total: snapshot?.folders.reduce(0) { $0 + $1.messageCount } ?? 0, isComplete: false)
+                searchResults = []
+            } catch { errorMessage = error.localizedDescription }
+            refreshOperationalStatus()
+        }
+    }
+
+    func refreshOperationalStatus() {
+        guard snapshot != nil else { operationalStatus = nil; return }
+        operationalStatus = reader.operationalStatus()
+    }
+
+    func loadInlineImages(for message: MessageSummary) {
+        inlineImageTask?.cancel()
+        inlineImages = [:]
+        let candidates = message.attachments.filter {
+            $0.isAvailable && $0.contentID != nil && $0.contentType.lowercased().hasPrefix("image/")
+                && $0.byteCount <= 20 * 1_024 * 1_024
+        }
+        guard !candidates.isEmpty else { return }
+        let reader = reader
+        let messageID = message.id
+        inlineImageTask = Task {
+            let images = await Task.detached(priority: .userInitiated) {
+                var result: [String: String] = [:]
+                var total = 0
+                for attachment in candidates {
+                    guard !Task.isCancelled, total < 64 * 1_024 * 1_024,
+                          let cid = attachment.contentID.map(Self.normalizedContentID), !cid.isEmpty,
+                          let data = try? reader.attachmentData(for: attachment),
+                          total + data.count <= 64 * 1_024 * 1_024 else { continue }
+                    total += data.count
+                    result[cid.lowercased()] = "data:\(Self.safeImageMIMEType(attachment.contentType));base64,\(data.base64EncodedString())"
+                }
+                return result
+            }.value
+            guard !Task.isCancelled, selectedMessage?.id == messageID else { return }
+            inlineImages = images
+        }
+    }
+
+    private nonisolated static func normalizedContentID(_ value: String) -> String {
+        value.trimmingCharacters(in: CharacterSet(charactersIn: "<> \t\r\n"))
+    }
+
+    private nonisolated static func safeImageMIMEType(_ value: String) -> String {
+        let allowed = ["image/png", "image/jpeg", "image/gif", "image/webp", "image/tiff", "image/bmp", "image/heic", "image/svg+xml"]
+        let normalized = value.lowercased().split(separator: ";", maxSplits: 1).first.map(String.init) ?? ""
+        return allowed.contains(normalized) ? normalized : "application/octet-stream"
+    }
+
+    func previewAttachment(_ attachment: AttachmentSummary) {
+        guard attachment.isAvailable else {
+            errorMessage = attachment.diagnostic?.description ?? "The attachment is unavailable."
+            return
+        }
+        let reader = reader
+        let files = attachmentFiles
+        Task {
+            do {
+                let url = try await Task.detached(priority: .userInitiated) {
+                    try files.temporaryFile(for: attachment, reader: reader)
+                }.value
+                AttachmentPreviewController.shared.present(url)
+            } catch { errorMessage = error.localizedDescription }
+        }
+    }
+
+    func saveAttachment(_ attachment: AttachmentSummary) {
+        guard attachment.isAvailable else {
+            errorMessage = attachment.diagnostic?.description ?? "The attachment is unavailable."
+            return
+        }
+        let panel = NSSavePanel()
+        panel.title = "Save Attachment"
+        panel.nameFieldStringValue = AttachmentFileStore.safeFilename(attachment.filename)
+        guard panel.runModal() == .OK, let destination = panel.url else { return }
+        let reader = reader
+        let files = attachmentFiles
+        Task {
+            do {
+                try await Task.detached(priority: .userInitiated) {
+                    try files.export(attachment, to: destination, reader: reader)
+                }.value
+            } catch { errorMessage = error.localizedDescription }
+        }
+    }
+
+    func exportAllAttachments(from message: MessageSummary) {
+        let panel = NSOpenPanel()
+        panel.title = "Export All Attachments"
+        panel.prompt = "Export"
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let destination = panel.url else { return }
+        let reader = reader
+        let files = attachmentFiles
+        Task {
+            do {
+                _ = try await Task.detached(priority: .userInitiated) {
+                    try files.exportAll(message.attachments, to: destination, reader: reader)
+                }.value
+            } catch { errorMessage = error.localizedDescription }
+        }
+    }
+
+    func exportMessage(_ message: MessageSummary, format: MessageExportFormat) {
+        let panel = NSSavePanel()
+        panel.title = "Export Message"
+        panel.nameFieldStringValue = AttachmentFileStore.safeFilename(message.subject) + ".\(format.rawValue)"
+        guard panel.runModal() == .OK, let destination = panel.url else { return }
+        let reader = reader
+        Task {
+            do {
+                try await Task.detached(priority: .userInitiated) {
+                    let data = try MessageExporter.data(for: message, format: format, reader: reader)
+                    try data.write(to: destination, options: [.atomic])
+                }.value
+            } catch { errorMessage = error.localizedDescription }
+        }
+    }
+
+    func attachmentDragProvider(_ attachment: AttachmentSummary) -> NSItemProvider {
+        let provider = NSItemProvider()
+        provider.suggestedName = AttachmentFileStore.safeFilename(attachment.filename)
+        guard attachment.isAvailable else { return provider }
+        let type = UTType(mimeType: attachment.contentType)
+            ?? UTType(filenameExtension: (attachment.filename as NSString).pathExtension)
+            ?? .data
+        let reader = reader
+        let files = attachmentFiles
+        provider.registerFileRepresentation(
+            forTypeIdentifier: type.identifier,
+            fileOptions: [.openInPlace],
+            visibility: .all
+        ) { completion in
+            let progress = Progress(totalUnitCount: 1)
+            Task.detached(priority: .userInitiated) {
+                do {
+                    let url = try files.temporaryFile(for: attachment, reader: reader)
+                    progress.completedUnitCount = 1
+                    completion(url, true, nil)
+                } catch {
+                    completion(nil, false, error)
+                }
+            }
+            return progress
+        }
+        return provider
     }
 
     private func resetPageState() {
@@ -172,17 +414,20 @@ final class ArchiveStore: ObservableObject {
         indexTask?.cancel()
         let reader = reader
         indexTask = Task {
-            do {
-                try await Task.detached(priority: .utility) {
-                    try reader.buildSearchIndex { progress in
-                        Task { @MainActor [weak self] in
-                            self?.indexProgress = progress
-                        }
+            let worker = Task.detached(priority: .utility) {
+                try reader.buildSearchIndex { progress in
+                    Task { @MainActor [weak self] in
+                        self?.indexProgress = progress
+                        self?.refreshOperationalStatus()
                     }
-                }.value
+                }
+            }
+            do {
+                try await withTaskCancellationHandler { try await worker.value } onCancel: { worker.cancel() }
             } catch {
                 if !Task.isCancelled { errorMessage = error.localizedDescription }
             }
+            refreshOperationalStatus()
         }
     }
 }

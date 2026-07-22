@@ -81,7 +81,9 @@ final class OLMMessageParser: NSObject, XMLParserDelegate {
                 id: "\(index)-\(filename)",
                 filename: filename,
                 byteCount: size,
-                contentType: attributeDict["OPFAttachmentContentType"] ?? "application/octet-stream"
+                contentType: attributeDict["OPFAttachmentContentType"] ?? "application/octet-stream",
+                contentID: attributeDict["OPFAttachmentContentID"],
+                archiveEntryPath: attributeDict["OPFAttachmentURL"]
             ))
         }
     }

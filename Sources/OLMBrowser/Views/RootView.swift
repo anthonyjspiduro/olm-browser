@@ -30,6 +30,7 @@ struct RootView: View {
 
 private struct BrowserView: View {
     @EnvironmentObject private var store: ArchiveStore
+    @State private var showingArchiveInformation = false
 
     var body: some View {
         NavigationSplitView {
@@ -53,12 +54,59 @@ private struct BrowserView: View {
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button {
-                    // Index controls arrive with the production archive reader.
+                    store.refreshOperationalStatus()
+                    showingArchiveInformation.toggle()
                 } label: {
                     Label("Archive Information", systemImage: "info.circle")
                 }
                 .help("Archive information")
+                .popover(isPresented: $showingArchiveInformation) {
+                    ArchiveInformationView()
+                }
             }
         }
+    }
+}
+
+private struct ArchiveInformationView: View {
+    @EnvironmentObject private var store: ArchiveStore
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Archive Operations").font(.headline)
+            if let status = store.operationalStatus {
+                Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 6) {
+                    row("Archive entries", status.archiveEntries.formatted())
+                    row("Message entries", status.messageEntries.formatted())
+                    row("Attachment payloads", status.attachmentEntries.formatted())
+                    row("Duplicate ZIP paths", status.duplicateEntryPaths.formatted())
+                    row("Unreadable messages", status.failedMessageEntries.formatted())
+                    row("Search cache", ByteCountFormatter.string(fromByteCount: status.cacheByteCount, countStyle: .file))
+                }
+                .font(.callout)
+            }
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text(store.indexProgress.isComplete ? "Search index complete" : "Indexing search")
+                ProgressView(value: store.indexProgress.fractionCompleted)
+                Text("\(store.indexProgress.indexed.formatted()) of \(store.indexProgress.total.formatted()) entries · \(store.indexProgress.failed.formatted()) unreadable")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
+            HStack {
+                if !store.indexProgress.isComplete {
+                    Button("Cancel Indexing") { store.cancelIndexing() }
+                }
+                Button("Rebuild Index") { store.rebuildSearchIndex() }
+                Button("Delete Cache", role: .destructive) { store.deleteSearchCache() }
+            }
+        }
+        .padding(18)
+        .frame(width: 390)
+    }
+
+    @ViewBuilder
+    private func row(_ label: String, _ value: String) -> some View {
+        GridRow { Text(label).foregroundStyle(.secondary); Text(value).textSelection(.enabled) }
     }
 }

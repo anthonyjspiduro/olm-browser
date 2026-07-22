@@ -17,9 +17,31 @@ enum ArchiveReaderError: LocalizedError {
     }
 }
 
+enum AttachmentAccessError: LocalizedError {
+    case unavailable(String)
+    case invalidDestination
+
+    var errorDescription: String? {
+        switch self {
+        case .unavailable(let reason): reason
+        case .invalidDestination: "The attachment destination is invalid."
+        }
+    }
+}
+
 protocol OLMArchiveReading: Sendable {
     func openArchive(at url: URL) throws -> ArchiveSnapshot
     func loadMessages(in folderID: MailFolder.ID, offset: Int, limit: Int) throws -> MessagePage
     func buildSearchIndex(progress: @escaping @Sendable (IndexProgress) -> Void) throws
-    func searchMessages(matching query: String, limit: Int) throws -> [MessageSummary]
+    func searchMessages(
+        matching query: String,
+        folderID: MailFolder.ID?,
+        offset: Int,
+        limit: Int,
+        sort: SearchSort
+    ) throws -> MessagePage
+    func attachmentData(for attachment: AttachmentSummary) throws -> Data
+    func operationalStatus() -> ArchiveOperationalStatus
+    func resetSearchIndex() throws
+    func deleteSearchCache() throws
 }

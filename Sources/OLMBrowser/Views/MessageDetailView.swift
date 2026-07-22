@@ -33,7 +33,7 @@ struct MessageDetailView: View {
                     }
 
                     if bodyMode == .html, let html = message.htmlBody {
-                        HTMLMessageView(html: html)
+                        HTMLMessageView(html: html, inlineImages: store.inlineImages)
                             .id(message.id)
                             .frame(minHeight: 480)
                     } else {
@@ -46,7 +46,7 @@ struct MessageDetailView: View {
                     if !message.attachments.isEmpty {
                         Divider()
                             .padding(.vertical, 18)
-                        AttachmentStrip(attachments: message.attachments)
+                        AttachmentStrip(message: message)
                     }
                 }
                 .padding(24)
@@ -55,6 +55,9 @@ struct MessageDetailView: View {
             .background(.background)
             .onChange(of: message.id) {
                 bodyMode = message.htmlBody == nil ? .plainText : .html
+            }
+            .task(id: message.id) {
+                store.loadInlineImages(for: message)
             }
         } else {
             ContentUnavailableView(
@@ -72,6 +75,7 @@ private enum BodyMode: Hashable {
 }
 
 private struct MessageHeader: View {
+    @EnvironmentObject private var store: ArchiveStore
     let message: MessageSummary
 
     var body: some View {
@@ -81,6 +85,11 @@ private struct MessageHeader: View {
                     .font(.title2.weight(.semibold))
                     .textSelection(.enabled)
                 Spacer()
+                Menu("Export") {
+                    ForEach(MessageExportFormat.allCases) { format in
+                        Button(format.label) { store.exportMessage(message, format: format) }
+                    }
+                }
                 if message.isFlagged {
                     Image(systemName: "flag.fill")
                         .foregroundStyle(.orange)
@@ -121,14 +130,19 @@ private struct ParticipantText: View {
 }
 
 private struct AttachmentStrip: View {
-    let attachments: [AttachmentSummary]
+    @EnvironmentObject private var store: ArchiveStore
+    let message: MessageSummary
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Attachments")
-                .font(.headline)
+            HStack {
+                Text("Attachments").font(.headline)
+                Spacer()
+                Button("Export All…") { store.exportAllAttachments(from: message) }
+                    .disabled(!message.attachments.contains(where: \.isAvailable))
+            }
 
-            ForEach(attachments) { attachment in
+            ForEach(message.attachments) { attachment in
                 HStack(spacing: 12) {
                     Image(systemName: "doc")
                         .font(.title2)
@@ -136,17 +150,24 @@ private struct AttachmentStrip: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(attachment.filename)
                             .lineLimit(1)
-                        Text(attachment.formattedSize)
+                        Text("\(attachment.formattedSize) · \(attachment.contentType)")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                        if let diagnostic = attachment.diagnostic {
+                            Label(diagnostic.description, systemImage: "exclamationmark.triangle")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                        }
                     }
                     Spacer()
-                    Button("Preview") {}
-                        .disabled(true)
-                        .help("Attachment preview arrives with the production archive reader")
+                    Button("Preview") { store.previewAttachment(attachment) }
+                        .disabled(!attachment.isAvailable)
+                    Button("Save As…") { store.saveAttachment(attachment) }
+                        .disabled(!attachment.isAvailable)
                 }
                 .padding(10)
                 .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 9))
+                .onDrag { store.attachmentDragProvider(attachment) }
             }
         }
     }

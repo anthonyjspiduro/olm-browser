@@ -7,8 +7,10 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
     private var archive: ZIPArchive?
     private var catalog = Catalog()
     private var entriesByPath: [String: ZIPEntry] = [:]
+    private var allEntriesByPath: [String: [ZIPEntry]] = [:]
     private var folderByEntryPath: [String: MailFolder.ID] = [:]
     private var searchIndex: OLMSearchIndex?
+    private var failedMessageEntryPaths: Set<String> = []
 
     func openArchive(at url: URL) throws -> ArchiveSnapshot {
         let resourceValues = try url.resourceValues(forKeys: [
@@ -43,13 +45,16 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
                 folderLookup[entry.path] = folderID
             }
         }
+        let completePathLookup = Dictionary(grouping: openedArchive.entries, by: \.path)
 
         stateLock.withLock {
             archive = openedArchive
             catalog = openedCatalog
             entriesByPath = pathLookup
+            allEntriesByPath = completePathLookup
             folderByEntryPath = folderLookup
             searchIndex = openedIndex
+            failedMessageEntryPaths = []
         }
 
         return ArchiveSnapshot(
@@ -96,7 +101,7 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
         }
         var offset = min(index.nextEntryOffset, work.count)
         if index.isComplete {
-            progress(IndexProgress(indexed: work.count, total: work.count, isComplete: true))
+            progress(IndexProgress(indexed: work.count, total: work.count, isComplete: true, failed: stateLock.withLock { failedMessageEntryPaths.count }))
             return
         }
 
@@ -119,19 +124,68 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
                 throw error
             }
             offset = end
-            progress(IndexProgress(indexed: offset, total: work.count, isComplete: offset == work.count))
+            progress(IndexProgress(indexed: offset, total: work.count, isComplete: offset == work.count, failed: stateLock.withLock { failedMessageEntryPaths.count }))
         }
     }
 
-    func searchMessages(matching query: String, limit: Int) throws -> [MessageSummary] {
+    func searchMessages(
+        matching query: String,
+        folderID: MailFolder.ID?,
+        offset: Int,
+        limit: Int,
+        sort: SearchSort
+    ) throws -> MessagePage {
         let state = stateLock.withLock { (archive, searchIndex, entriesByPath, folderByEntryPath) }
-        guard let archive = state.0, let index = state.1 else { return [] }
-        let paths = try index.searchPaths(matching: query, limit: limit)
+        guard let archive = state.0, let index = state.1 else {
+            return MessagePage(messages: [], nextOffset: 0, totalCount: 0)
+        }
+        let page = try index.searchPaths(
+            matching: query, folderID: folderID, offset: offset, limit: limit, sort: sort
+        )
         let parser = OLMMessageParser()
-        return paths.compactMap { path in
+        let messages: [MessageSummary] = page.paths.compactMap { path -> MessageSummary? in
             guard let entry = state.2[path], let folderID = state.3[path] else { return nil }
             return parse(entry: entry, folderID: folderID, archive: archive, parser: parser)
         }
+        return MessagePage(messages: messages, nextOffset: page.nextOffset, totalCount: page.totalCount)
+    }
+
+    func attachmentData(for attachment: AttachmentSummary) throws -> Data {
+        if let diagnostic = attachment.diagnostic {
+            throw AttachmentAccessError.unavailable(diagnostic.description)
+        }
+        guard let path = attachment.archiveEntryPath else {
+            throw AttachmentAccessError.unavailable("The attachment has no archive payload reference.")
+        }
+        let state = stateLock.withLock { (archive, allEntriesByPath[path] ?? []) }
+        guard let archive = state.0, state.1.count == 1, let entry = state.1.first else {
+            throw AttachmentAccessError.unavailable("The attachment payload is not uniquely available.")
+        }
+        return try archive.data(for: entry, maximumSize: Self.maximumAttachmentSize)
+    }
+
+    func operationalStatus() -> ArchiveOperationalStatus {
+        stateLock.withLock {
+            let entries = archive?.entries ?? []
+            return ArchiveOperationalStatus(
+                archiveEntries: entries.count,
+                messageEntries: catalog.messageEntriesByFolder.values.reduce(0) { $0 + $1.count },
+                attachmentEntries: entries.count { $0.path.contains("/com.microsoft.__Attachments/") && !$0.isDirectory },
+                duplicateEntryPaths: allEntriesByPath.values.count { $0.count > 1 },
+                failedMessageEntries: failedMessageEntryPaths.count,
+                cacheByteCount: searchIndex?.cacheByteCount ?? 0
+            )
+        }
+    }
+
+    func resetSearchIndex() throws {
+        guard let index = stateLock.withLock({ searchIndex }) else { throw ArchiveReaderError.unreadableArchive }
+        try index.reset(compact: false)
+    }
+
+    func deleteSearchCache() throws {
+        guard let index = stateLock.withLock({ searchIndex }) else { throw ArchiveReaderError.unreadableArchive }
+        try index.reset(compact: true)
     }
 
     private func parse(
@@ -142,11 +196,78 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
     ) -> MessageSummary? {
         autoreleasepool {
             guard let data = try? archive.data(for: entry, maximumSize: 32 * 1_024 * 1_024) else {
+                stateLock.withLock { _ = failedMessageEntryPaths.insert(entry.path) }
                 return nil
             }
-            return parser.parse(data: data, entryPath: entry.path, folderID: folderID)
+            guard let parsed = parser.parse(data: data, entryPath: entry.path, folderID: folderID) else {
+                stateLock.withLock { _ = failedMessageEntryPaths.insert(entry.path) }
+                return nil
+            }
+            return resolvingAttachments(in: parsed, messageEntry: entry)
         }
     }
+
+    private func resolvingAttachments(in message: MessageSummary, messageEntry: ZIPEntry) -> MessageSummary {
+        let lookup = stateLock.withLock { allEntriesByPath }
+        let parent = (messageEntry.path as NSString).deletingLastPathComponent
+        let allowedPrefix = parent + "/com.microsoft.__Attachments/"
+        let resolved = message.attachments.map { attachment -> AttachmentSummary in
+            let rawPath = attachment.archiveEntryPath?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let components = rawPath.split(separator: "/", omittingEmptySubsequences: false)
+            let malformed = rawPath.isEmpty
+                || rawPath.hasPrefix("/")
+                || rawPath.contains("\\")
+                || rawPath.contains("\0")
+                || components.contains(".")
+                || components.contains("..")
+                || !rawPath.hasPrefix(allowedPrefix)
+            let candidates = malformed ? [] : lookup[rawPath, default: []]
+            let diagnostic: AttachmentDiagnostic?
+            let resolvedPath: String?
+            let actualSize: Int64
+            if malformed {
+                diagnostic = .malformedReference
+                resolvedPath = nil
+                actualSize = attachment.byteCount
+            } else if candidates.isEmpty {
+                diagnostic = .missingPayload
+                resolvedPath = nil
+                actualSize = attachment.byteCount
+            } else if candidates.count > 1 {
+                diagnostic = .duplicatePayload
+                resolvedPath = nil
+                actualSize = attachment.byteCount
+            } else if let entry = candidates.first,
+                      entry.isDirectory || entry.uncompressedSize > Self.maximumAttachmentSize {
+                diagnostic = entry.isDirectory
+                    ? .malformedReference
+                    : .oversized(limit: Int64(Self.maximumAttachmentSize))
+                resolvedPath = nil
+                actualSize = Int64(clamping: entry.uncompressedSize)
+            } else {
+                diagnostic = nil
+                resolvedPath = rawPath
+                actualSize = candidates.first.map { Int64(clamping: $0.uncompressedSize) } ?? attachment.byteCount
+            }
+            return AttachmentSummary(
+                id: attachment.id,
+                filename: attachment.filename,
+                byteCount: actualSize,
+                contentType: attachment.contentType,
+                contentID: attachment.contentID,
+                archiveEntryPath: resolvedPath,
+                diagnostic: diagnostic
+            )
+        }
+        return MessageSummary(
+            id: message.id, folderID: message.folderID, subject: message.subject,
+            sender: message.sender, recipients: message.recipients, sentAt: message.sentAt,
+            preview: message.preview, body: message.body, htmlBody: message.htmlBody,
+            isRead: message.isRead, isFlagged: message.isFlagged, attachments: resolved
+        )
+    }
+
+    static let maximumAttachmentSize: UInt64 = 256 * 1_024 * 1_024
 
     private func buildCatalog(entries: [ZIPEntry]) -> Catalog {
         var catalog = Catalog()

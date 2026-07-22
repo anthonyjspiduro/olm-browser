@@ -26,6 +26,12 @@ The reader has been validated against a 26 GB OLM containing 83,172 messages acr
 - Incremental 100-message paging while scrolling
 - Sender, recipient, subject, sent date, preview, body, read state, and flag display
 - Attachment filename, content type, and size display
+- Attachment payload resolution through each message's archive reference
+- Quick Look attachment preview, Save As, drag-to-Finder, and export-all
+- Unique per-session temporary files with close/quit and 24-hour stale cleanup
+- 256 MB per-attachment and 1 GB batch-export extraction limits
+- Missing, duplicate, malformed, and oversized attachment diagnostics
+- Local inline `cid:` image resolution with separate 20 MB image and 64 MB message limits
 - Plain-text message rendering with selectable text
 - Secured HTML email rendering with:
   - JavaScript disabled
@@ -41,8 +47,15 @@ The reader has been validated against a 26 GB OLM containing 83,172 messages acr
 - Resumable 250-entry index transactions
 - Visible search-index progress
 - Disposable, archive-fingerprinted indexes in the macOS user cache
+- Structured `from:`, `to:`, `folder:`, `after:`, `before:`, and `has:attachment` filters
+- 100-result search paging without a 500-result ceiling
+- Optional folder-scoped search and relevance/newest/oldest sorting
+- Cancelable archive opening and indexing
+- Search-index rebuild, cache deletion/compaction, and cache-size reporting
+- Archive entry, attachment payload, duplicate-path, and unreadable-message diagnostics
+- Message export as `.eml` (including available attachments), plain text, and JSON
 - Background archive opening, paging, search, and indexing
-- Standalone parser, paging, and FTS5 smoke checks
+- Standalone parser, paging, attachment, export, structured-search, and FTS5 smoke checks
 
 ## Build and run
 
@@ -79,7 +92,9 @@ swiftc Sources/OLMBrowser/Models/ArchiveModels.swift \
 
 Full-text indexing begins after the archive folder catalog opens. Messages remain browsable while indexing runs. The index commits every 250 entries and records its next position in the same transaction, allowing interrupted indexing to resume safely.
 
-Search results may be incomplete until the progress indicator finishes. Derived search databases can be deleted without affecting the source OLM.
+Search results may be incomplete until the progress indicator finishes. Queries accept free text plus `from:`, `to:`, `folder:`, `after:YYYY-MM-DD`, `before:YYYY-MM-DD`, and `has:attachment`. Quote filter values containing spaces. Derived search data can be rebuilt or deleted and compacted without affecting the source OLM.
+
+Search results load in 100-message pages. The message-list controls can restrict a query to the selected folder and sort by relevance, newest date, or oldest date.
 
 ## Privacy and safety
 
@@ -88,16 +103,15 @@ Search results may be incomplete until the progress indicator finishes. Derived 
 - HTML email runs with JavaScript disabled.
 - Remote content and tracking pixels are blocked by Content Security Policy.
 - The HTML viewer uses a nonpersistent WebKit data store.
+- Inline images are read only from resolved local attachment entries and converted to bounded `data:` resources; unmatched CIDs remain blocked.
+- Attachment and message exports happen only after an explicit user action.
 - Search indexes remain local in the user's cache directory.
 - AI and cloud services are not currently connected.
 
 ## Known limitations
 
-- Attachment metadata is visible, but attachment payload preview and export are not implemented.
-- Inline `cid:` images are not resolved yet.
 - HTML links are displayed but navigation is intentionally blocked.
-- Search supports text terms but not structured filters such as `from:` or `after:` yet.
-- Search results are currently limited to 500 messages per query.
+- `cc:` and `bcc:` structured search are not implemented yet.
 - CC and BCC fields are not displayed yet.
 - Folder unread totals are not fully calculated.
 - The packaged build is Apple Silicon only and ad-hoc signed, not notarized.
@@ -106,19 +120,16 @@ Search results may be incomplete until the progress indicator finishes. Derived 
 
 ## Planned features
 
-1. Resolve attachment payloads to their archive entries.
-2. Add Quick Look, Save As, drag-to-Finder, and batch attachment export.
-3. Resolve inline `cid:` images without permitting remote network access.
-4. Add structured search filters, date ranges, folder scoping, and result paging.
-5. Add opening/indexing cancellation, cache controls, and detailed diagnostics.
-6. Add message export as `.eml`, PDF, text, JSON, and CSV.
-7. Reconstruct conversations and expose richer message headers.
-8. Add CRC verification and more granular corrupt-entry recovery.
-9. Add recent archives, drag-and-drop opening, and persistent security-scoped access.
-10. Add contacts and calendar browsing.
-11. Add optional local or explicitly configured grounded AI features.
-12. Produce a universal binary, Developer ID signature, notarization, and distributable DMG.
-13. Expand accessibility, keyboard-navigation, locale, and cross-version OLM testing.
+1. Add `cc:`/`bcc:` search, CC/BCC display, richer headers, unread totals, and globally accurate chronological folder paging.
+2. Add explicit external-link opening with a confirmation boundary.
+3. Add PDF/CSV and batch message export plus exportable diagnostic reports.
+4. Add CRC verification, unsupported-compression reporting, and more granular malformed-XML recovery.
+5. Add detailed phase/byte progress during initial archive opening.
+6. Add recent archives, drag-and-drop opening, and persistent security-scoped access.
+7. Reconstruct conversations and expose contacts and calendar records.
+8. Add optional local or explicitly configured grounded AI features.
+9. Produce a universal binary, Developer ID signature, notarization, and distributable DMG.
+10. Expand accessibility, keyboard navigation, localization, and cross-version OLM testing.
 
 ## Project layout
 

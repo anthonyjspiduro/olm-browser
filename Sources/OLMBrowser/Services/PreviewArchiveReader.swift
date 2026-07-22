@@ -140,7 +140,17 @@ struct PreviewArchiveReader: OLMArchiveReading {
         progress(IndexProgress(indexed: 0, total: 0, isComplete: true))
     }
 
-    func searchMessages(matching query: String, limit: Int) throws -> [MessageSummary] {
-        []
+    func searchMessages(matching query: String, folderID: MailFolder.ID?, offset: Int, limit: Int, sort: SearchSort) throws -> MessagePage {
+        MessagePage(messages: [], nextOffset: 0, totalCount: 0)
     }
+
+    func attachmentData(for attachment: AttachmentSummary) throws -> Data {
+        throw ArchiveReaderError.unreadableArchive
+    }
+
+    func operationalStatus() -> ArchiveOperationalStatus {
+        ArchiveOperationalStatus(archiveEntries: 0, messageEntries: 0, attachmentEntries: 0, duplicateEntryPaths: 0, failedMessageEntries: 0, cacheByteCount: 0)
+    }
+    func resetSearchIndex() throws {}
+    func deleteSearchCache() throws {}
 }

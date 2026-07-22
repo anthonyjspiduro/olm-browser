@@ -3,6 +3,7 @@ import WebKit
 
 struct HTMLMessageView: NSViewRepresentable {
     let html: String
+    let inlineImages: [String: String]
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -22,9 +23,21 @@ struct HTMLMessageView: NSViewRepresentable {
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
-        guard context.coordinator.lastHTML != html else { return }
-        context.coordinator.lastHTML = html
-        webView.loadHTMLString(Self.securedDocument(containing: html), baseURL: nil)
+        let resolved = Self.resolvingInlineImages(in: html, images: inlineImages)
+        guard context.coordinator.lastHTML != resolved else { return }
+        context.coordinator.lastHTML = resolved
+        webView.loadHTMLString(Self.securedDocument(containing: resolved), baseURL: nil)
+    }
+
+    static func resolvingInlineImages(in html: String, images: [String: String]) -> String {
+        var result = html
+        for (rawID, dataURL) in images {
+            let id = rawID.trimmingCharacters(in: CharacterSet(charactersIn: "<> \t\r\n"))
+            guard !id.isEmpty else { continue }
+            result = result.replacingOccurrences(of: "cid:\(id)", with: dataURL, options: .caseInsensitive)
+            result = result.replacingOccurrences(of: "cid:<\(id)>", with: dataURL, options: .caseInsensitive)
+        }
+        return result
     }
 
     private static func securedDocument(containing messageHTML: String) -> String {

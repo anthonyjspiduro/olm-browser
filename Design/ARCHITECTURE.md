@@ -33,7 +33,7 @@ folders    messages     attachments
 
 ### Archive access
 
-`OLMArchiveReading` is the narrow interface between the app and archive implementations. The production reader will use ZIP64 random access, impose decompression limits, and surface corrupt entries without failing the whole archive.
+`OLMArchiveReading` is the narrow interface between the app and archive implementations. The production reader uses ZIP64 random access, imposes decompression limits, and surfaces corrupt entries without failing the whole archive.
 
 The first production implementation now includes a native central-directory reader with ZIP64 offsets, stored-entry reads, raw DEFLATE support through a minimal zlib bridge, encryption rejection, and per-entry expansion limits. It does not invoke `/usr/bin/unzip` or create a second expanded archive.
 
@@ -59,11 +59,23 @@ The primary interface is a native three-column `NavigationSplitView`:
 2. Filterable message results
 3. Message body and attachments
 
-HTML mail will be rendered in a locked-down `WKWebView`: scripts disabled, remote resources blocked by default, and navigation intercepted. Plain text remains available as a fallback.
+HTML mail is rendered in a locked-down `WKWebView`: scripts disabled, remote resources blocked, and navigation intercepted. Plain text remains available as a fallback. Resolved inline image attachments are bounded, read from the archive, and substituted as `data:` image URLs; the CSP continues to reject HTTP(S), scripts, frames, forms, media, objects, and connections.
 
 ### Attachments
 
-Attachment entries are resolved to their parent message during cataloging. Previewing creates a uniquely named temporary file, invokes Quick Look where supported, and removes temporary material according to a bounded cleanup policy. Export is always an explicit user action.
+Attachment metadata is resolved lazily from `OPFAttachmentURL` to an exact central-directory entry under the parent message folder's `com.microsoft.__Attachments` namespace. Empty, escaping, missing, duplicate, directory, and oversized references remain unavailable and carry a visible diagnostic.
+
+Previewing creates a UUID-isolated temporary file and invokes Quick Look. Drag-to-Finder uses a promised temporary representation. Save As and export-all write only to an explicit destination, preserve the displayed original filename subject to filesystem-safe leaf-name normalization, avoid batch filename collisions, and never overwrite during batch export. Per-file extraction is limited to 256 MB and a message batch to 1 GB. Session files are removed on archive close or application termination; abandoned sessions older than 24 hours are removed at startup.
+
+### Search query path
+
+The index schema stores folder ID, sent timestamp, and attachment presence as unindexed FTS columns beside searchable text. A versioned schema migration discards the older derived index and resumes in 250-message transactions. Filter values are bound SQLite parameters; free terms alone become an escaped FTS expression. Results are counted and returned in 100-message pages with relevance or date ordering.
+
+### Operations and export
+
+Archive opening and indexing run in cancelable tasks. The operations panel reports central-directory, message, attachment, duplicate-path, unreadable-message, index-progress, and cache-size counts. Rebuild clears the checkpoint and resumes indexing; Delete Cache removes indexed rows and compacts the disposable database.
+
+Message export is explicit and local. Plain-text and JSON exports include normalized message fields. RFC 822 `.eml` export creates multipart plain/HTML content and includes only resolved, size-bounded attachments.
 
 ### AI boundary
 

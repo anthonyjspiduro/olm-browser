@@ -27,6 +27,7 @@ struct WelcomeView: View {
                     Text("The source file remains read-only")
                         .font(.caption)
                         .foregroundStyle(.tertiary)
+                    Button("Cancel") { store.cancelOpening() }
                 }
             } else {
                 Button("Open OLM…") {

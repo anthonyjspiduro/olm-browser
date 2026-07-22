@@ -148,6 +148,14 @@ final class ArchiveStore: ObservableObject {
         }
     }
 
+    func messageDidAppear(_ messageID: MessageSummary.ID) {
+        let visible = visibleMessages
+        guard hasMoreMessages,
+              let index = visible.firstIndex(where: { $0.id == messageID }),
+              index >= max(0, visible.count - 20) else { return }
+        loadNextPage()
+    }
+
     func searchTextChanged() {
         searchTask?.cancel()
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)

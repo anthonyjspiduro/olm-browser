@@ -18,6 +18,7 @@ The reader has been validated against a 26 GB OLM containing 83,172 messages acr
 - Finder-launchable, ad-hoc-signed `OLM Browser.app`
 - `.olm` Finder document registration and Open dialog
 - Read-only ZIP64 central-directory parsing and random-access entry reads
+- One persistent read-only archive descriptor with thread-safe positional reads
 - Stored and raw-DEFLATE ZIP entry support through a minimal zlib bridge
 - CRC-32 verification before decoded entry bytes reach messages, attachments, previews, or exports
 - Aggregate unsupported-compression and encountered integrity-failure diagnostics
@@ -26,6 +27,7 @@ The reader has been validated against a 26 GB OLM containing 83,172 messages acr
 - Expandable nested folder hierarchy
 - Folder message counts and accurate unread totals after indexing
 - Incremental 100-message paging with globally chronological order from the completed index
+- Bounded eight-worker message decoding and 20-row look-ahead page prefetching
 - Sender, To, CC, BCC, subject, sent/received dates, folder, message ID, attachment count, read state, and flag display
 - Attachment filename, content type, and size display
 - Attachment payload resolution through each message's archive reference
@@ -51,6 +53,8 @@ The reader has been validated against a 26 GB OLM containing 83,172 messages acr
 - Persistent SQLite/FTS5 search across subjects, participants, previews, bodies, and attachment names
 - Search available while background indexing continues
 - Resumable 250-entry index transactions
+- Parallel index decoding in 32-message chunks with serialized SQLite commits
+- Interactive paging priority over background indexing
 - Visible search-index progress
 - Disposable, archive-fingerprinted indexes in the macOS user cache
 - Structured `from:`, `to:`, `cc:`, `bcc:`, `folder:`, `after:`, `before:`, and `has:attachment` filters
@@ -63,7 +67,7 @@ The reader has been validated against a 26 GB OLM containing 83,172 messages acr
 - Message export as `.eml` (including available attachments), plain text, JSON, PDF, and CSV
 - Batch export of up to 1,000 currently loaded messages with a 1 GB output limit
 - Background archive opening, paging, search, and indexing
-- Standalone parser, archive-integrity, paging, attachment, export, diagnostics, structured-search, and FTS5 smoke checks
+- Standalone parser, archive-integrity, paging-performance, index-performance, attachment, export, diagnostics, structured-search, and FTS5 smoke checks
 - Synthetic remote-image policy, CSP, local-CID, and per-message approval smoke checks
 
 ## Build and run
@@ -100,6 +104,8 @@ swiftc Sources/OLMBrowser/Models/ArchiveModels.swift \
 ## Search behavior
 
 Full-text indexing begins after the archive folder catalog opens. Messages remain browsable while indexing runs. The index commits every 250 entries and records its next position in the same transaction, allowing interrupted indexing to resume safely.
+
+Message XML decoding, CRC verification, and attachment-reference resolution use a bounded eight-worker pipeline. Indexing feeds that pipeline in 32-message chunks and writes completed results through the single serialized SQLite connection. Interactive folder pages and searches take priority between index chunks. Folder scrolling requests the next 100-message page when the user is within 20 rows of the current boundary so loading normally finishes before the boundary is reached.
 
 Search results may be incomplete until the progress indicator finishes. Queries accept free text plus `from:`, `to:`, `cc:`, `bcc:`, `folder:`, `after:YYYY-MM-DD`, `before:YYYY-MM-DD`, and `has:attachment`. Quote filter values containing spaces. Derived search data can be rebuilt or deleted and compacted without affecting the source OLM.
 

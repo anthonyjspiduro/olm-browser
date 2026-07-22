@@ -1,4 +1,5 @@
 import CZipSupport
+import Darwin
 import Foundation
 
 enum ZIPArchiveError: LocalizedError {
@@ -9,6 +10,7 @@ enum ZIPArchiveError: LocalizedError {
     case truncatedEntry
     case decompressionFailed(Int32)
     case checksumMismatch(expected: UInt32, actual: UInt32)
+    case readFailed(Int32)
     case cancelled
 
     var errorDescription: String? {
@@ -21,6 +23,7 @@ enum ZIPArchiveError: LocalizedError {
         case .decompressionFailed(let code): "The ZIP entry could not be decompressed (zlib \(code))."
         case .checksumMismatch(let expected, let actual):
             "The ZIP entry failed its CRC-32 integrity check (expected \(String(format: "%08X", expected)), got \(String(format: "%08X", actual)))."
+        case .readFailed(let code): "The ZIP entry could not be read (POSIX error \(code))."
         case .cancelled: "Opening the archive was cancelled."
         }
     }
@@ -44,11 +47,18 @@ struct ZIPEntry: Sendable, Hashable {
 final class ZIPArchive: @unchecked Sendable {
     let url: URL
     let entries: [ZIPEntry]
+    private let descriptor: Int32
 
     init(url: URL) throws {
+        let openedEntries = try Self.readCentralDirectory(at: url)
+        let openedDescriptor = Darwin.open(url.path, O_RDONLY)
+        guard openedDescriptor >= 0 else { throw ZIPArchiveError.readFailed(errno) }
         self.url = url
-        self.entries = try Self.readCentralDirectory(at: url)
+        self.entries = openedEntries
+        self.descriptor = openedDescriptor
     }
+
+    deinit { Darwin.close(descriptor) }
 
     func data(for entry: ZIPEntry, maximumSize: UInt64 = 64 * 1_024 * 1_024) throws -> Data {
         guard entry.uncompressedSize <= maximumSize else {
@@ -62,23 +72,20 @@ final class ZIPArchive: @unchecked Sendable {
             throw ZIPArchiveError.entryTooLarge(entry.uncompressedSize)
         }
 
-        let handle = try FileHandle(forReadingFrom: url)
-        defer { try? handle.close() }
-
-        try handle.seek(toOffset: entry.localHeaderOffset)
-        let header = try handle.read(upToCount: 30) ?? Data()
+        let header = try readExactly(at: entry.localHeaderOffset, count: 30)
         guard header.count == 30, header.uint32LE(at: 0) == 0x04034b50 else {
             throw ZIPArchiveError.invalidArchive("missing local file header")
         }
 
         let nameLength = UInt64(header.uint16LE(at: 26))
         let extraLength = UInt64(header.uint16LE(at: 28))
-        let dataOffset = entry.localHeaderOffset + 30 + nameLength + extraLength
-        try handle.seek(toOffset: dataOffset)
-        let compressed = try handle.read(upToCount: Int(entry.compressedSize)) ?? Data()
-        guard compressed.count == Int(entry.compressedSize) else {
-            throw ZIPArchiveError.truncatedEntry
+        let (headerEnd, headerOverflow) = entry.localHeaderOffset.addingReportingOverflow(30)
+        let (nameEnd, nameOverflow) = headerEnd.addingReportingOverflow(nameLength)
+        let (dataOffset, extraOverflow) = nameEnd.addingReportingOverflow(extraLength)
+        guard !headerOverflow, !nameOverflow, !extraOverflow else {
+            throw ZIPArchiveError.invalidArchive("entry data offset overflow")
         }
+        let compressed = try readExactly(at: dataOffset, count: Int(entry.compressedSize))
 
         let result: Data
         switch entry.compressionMethod {
@@ -99,6 +106,39 @@ final class ZIPArchive: @unchecked Sendable {
             throw ZIPArchiveError.checksumMismatch(expected: entry.crc32, actual: actualCRC)
         }
         return result
+    }
+
+    /// `pread` keeps a single read-only descriptor open for the archive and is
+    /// safe for concurrent random-access reads because it does not mutate a
+    /// shared file offset.
+    private func readExactly(at offset: UInt64, count: Int) throws -> Data {
+        guard count >= 0,
+              offset <= UInt64(Int64.max),
+              UInt64(count) <= UInt64(Int64.max) - offset else {
+            throw ZIPArchiveError.invalidArchive("entry offset is outside the supported range")
+        }
+        if count == 0 { return Data() }
+        var data = Data(count: count)
+        var totalRead = 0
+        try data.withUnsafeMutableBytes { buffer in
+            guard let baseAddress = buffer.baseAddress else { throw ZIPArchiveError.truncatedEntry }
+            while totalRead < count {
+                let result = Darwin.pread(
+                    descriptor,
+                    baseAddress.advanced(by: totalRead),
+                    count - totalRead,
+                    off_t(offset) + off_t(totalRead)
+                )
+                if result > 0 {
+                    totalRead += result
+                } else if result == 0 {
+                    throw ZIPArchiveError.truncatedEntry
+                } else if errno != EINTR {
+                    throw ZIPArchiveError.readFailed(errno)
+                }
+            }
+        }
+        return data
     }
 
     private func inflate(_ compressed: Data, outputSize: Int) throws -> Data {

@@ -4,6 +4,8 @@ import Foundation
 /// bodies are parsed only for requested pages, search results, or indexing.
 final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
     private let stateLock = NSLock()
+    private let interactiveReadCondition = NSCondition()
+    private var interactiveReadCount = 0
     private var archive: ZIPArchive?
     private var catalog = Catalog()
     private var entriesByPath: [String: ZIPEntry] = [:]
@@ -79,15 +81,13 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
             (archive, catalog.messageEntriesByFolder[folderID] ?? [], searchIndex, entriesByPath)
         }
         guard let archive = state.0 else { throw ArchiveReaderError.unreadableArchive }
+        beginInteractiveRead()
+        defer { endInteractiveRead() }
         if let indexedPage = try state.2?.folderPagePaths(
             folderID: folderID, offset: offset, limit: limit
         ) {
-            let parser = OLMMessageParser()
-            let messages = indexedPage.paths.compactMap { path in
-                state.3[path].flatMap {
-                    parse(entry: $0, folderID: folderID, archive: archive, parser: parser)
-                }
-            }
+            let entries = indexedPage.paths.compactMap { state.3[$0] }
+            let messages = parseConcurrently(entries: entries, folderID: folderID, archive: archive)
             return MessagePage(
                 messages: messages,
                 nextOffset: indexedPage.nextOffset,
@@ -97,14 +97,9 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
         let orderedEntries = Array(state.1.reversed())
         let start = min(max(0, offset), orderedEntries.count)
         let end = min(start + max(1, limit), orderedEntries.count)
-        let parser = OLMMessageParser()
-        var messages: [MessageSummary] = []
-
-        for entry in orderedEntries[start..<end] {
-            if let message = parse(entry: entry, folderID: folderID, archive: archive, parser: parser) {
-                messages.append(message)
-            }
-        }
+        var messages = parseConcurrently(
+            entries: Array(orderedEntries[start..<end]), folderID: folderID, archive: archive
+        )
         messages.sort { $0.sentAt > $1.sentAt }
         return MessagePage(messages: messages, nextOffset: end, totalCount: orderedEntries.count)
     }
@@ -124,18 +119,34 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
             return
         }
 
-        let parser = OLMMessageParser()
         let batchSize = 250
         while offset < work.count {
             if Task.isCancelled { return }
             let end = min(offset + batchSize, work.count)
             try index.beginBatch()
             do {
-                for position in offset..<end {
-                    let (folderID, entry) = work[position]
-                    if let message = parse(entry: entry, folderID: folderID, archive: archive, parser: parser) {
-                        try index.insert(message, entryPath: entry.path)
+                var chunkStart = offset
+                while chunkStart < end {
+                    waitForInteractiveReadsToFinish()
+                    if Task.isCancelled {
+                        index.rollbackBatch()
+                        return
                     }
+                    let chunkEnd = min(chunkStart + Self.indexDecodeChunkSize, end)
+                    let chunkWork = work[chunkStart..<chunkEnd].map { folderID, entry in
+                        (entry, folderID)
+                    }
+                    let parsed = parseConcurrentlyResults(work: chunkWork, archive: archive)
+                    if Task.isCancelled {
+                        index.rollbackBatch()
+                        return
+                    }
+                    for (position, message) in parsed.enumerated() {
+                        if let message {
+                            try index.insert(message, entryPath: chunkWork[position].0.path)
+                        }
+                    }
+                    chunkStart = chunkEnd
                 }
                 try index.commitBatch(nextOffset: end, complete: end == work.count)
             } catch {
@@ -158,14 +169,16 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
         guard let archive = state.0, let index = state.1 else {
             return MessagePage(messages: [], nextOffset: 0, totalCount: 0)
         }
+        beginInteractiveRead()
+        defer { endInteractiveRead() }
         let page = try index.searchPaths(
             matching: query, folderID: folderID, offset: offset, limit: limit, sort: sort
         )
-        let parser = OLMMessageParser()
-        let messages: [MessageSummary] = page.paths.compactMap { path -> MessageSummary? in
+        let work = page.paths.compactMap { path -> (ZIPEntry, MailFolder.ID)? in
             guard let entry = state.2[path], let folderID = state.3[path] else { return nil }
-            return parse(entry: entry, folderID: folderID, archive: archive, parser: parser)
+            return (entry, folderID)
         }
+        let messages = parseConcurrently(work: work, archive: archive)
         return MessagePage(messages: messages, nextOffset: page.nextOffset, totalCount: page.totalCount)
     }
 
@@ -251,6 +264,61 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
         }
     }
 
+    private func parseConcurrently(
+        entries: [ZIPEntry], folderID: MailFolder.ID, archive: ZIPArchive
+    ) -> [MessageSummary] {
+        parseConcurrently(work: entries.map { ($0, folderID) }, archive: archive)
+    }
+
+    private func parseConcurrently(
+        work: [(ZIPEntry, MailFolder.ID)], archive: ZIPArchive
+    ) -> [MessageSummary] {
+        parseConcurrentlyResults(work: work, archive: archive).compactMap { $0 }
+    }
+
+    private func parseConcurrentlyResults(
+        work: [(ZIPEntry, MailFolder.ID)], archive: ZIPArchive
+    ) -> [MessageSummary?] {
+        guard !work.isEmpty else { return [] }
+        let state = ParallelMessageParseState(work: work)
+        let workerCount = min(Self.maximumConcurrentMessageReads, work.count)
+        DispatchQueue.concurrentPerform(iterations: workerCount) { _ in
+            let parser = OLMMessageParser()
+            while let item = state.takeNext() {
+                if Task.isCancelled { return }
+                let message = parse(
+                    entry: item.entry,
+                    folderID: item.folderID,
+                    archive: archive,
+                    parser: parser
+                )
+                state.store(message, at: item.index)
+            }
+        }
+        return state.completedResults()
+    }
+
+    private func beginInteractiveRead() {
+        interactiveReadCondition.lock()
+        interactiveReadCount += 1
+        interactiveReadCondition.unlock()
+    }
+
+    private func endInteractiveRead() {
+        interactiveReadCondition.lock()
+        interactiveReadCount -= 1
+        interactiveReadCondition.broadcast()
+        interactiveReadCondition.unlock()
+    }
+
+    private func waitForInteractiveReadsToFinish() {
+        interactiveReadCondition.lock()
+        while interactiveReadCount > 0 && !Task.isCancelled {
+            _ = interactiveReadCondition.wait(until: Date(timeIntervalSinceNow: 0.1))
+        }
+        interactiveReadCondition.unlock()
+    }
+
     private func recordArchiveReadFailure(_ error: Error, entryPath: String) {
         guard let zipError = error as? ZIPArchiveError else { return }
         stateLock.withLock {
@@ -333,6 +401,8 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
     }
 
     static let maximumAttachmentSize: UInt64 = 256 * 1_024 * 1_024
+    static let maximumConcurrentMessageReads = 8
+    static let indexDecodeChunkSize = 32
 
     private func buildCatalog(entries: [ZIPEntry]) -> Catalog {
         var catalog = Catalog()
@@ -415,6 +485,37 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
         case .deleted: 4
         case .custom: 5
         }
+    }
+}
+
+private final class ParallelMessageParseState: @unchecked Sendable {
+    typealias WorkItem = (entry: ZIPEntry, folderID: MailFolder.ID)
+
+    private let lock = NSLock()
+    private let work: [WorkItem]
+    private var nextIndex = 0
+    private var results: [MessageSummary?]
+
+    init(work: [WorkItem]) {
+        self.work = work
+        self.results = Array(repeating: nil, count: work.count)
+    }
+
+    func takeNext() -> (index: Int, entry: ZIPEntry, folderID: MailFolder.ID)? {
+        lock.withLock {
+            guard nextIndex < work.count else { return nil }
+            let index = nextIndex
+            nextIndex += 1
+            return (index, work[index].entry, work[index].folderID)
+        }
+    }
+
+    func store(_ message: MessageSummary?, at index: Int) {
+        lock.withLock { results[index] = message }
+    }
+
+    func completedResults() -> [MessageSummary?] {
+        lock.withLock { results }
     }
 }
 

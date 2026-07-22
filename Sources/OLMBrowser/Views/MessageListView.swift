@@ -57,9 +57,7 @@ struct MessageListView: View {
                     MessageRow(message: message)
                         .tag(message.id)
                         .onAppear {
-                            if message.id == store.visibleMessages.last?.id, store.hasMoreMessages {
-                                store.loadNextPage()
-                            }
+                            store.messageDidAppear(message.id)
                         }
                 }
                 .listStyle(.inset)

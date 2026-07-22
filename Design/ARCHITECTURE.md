@@ -35,7 +35,7 @@ folders    messages     attachments
 
 `OLMArchiveReading` is the narrow interface between the app and archive implementations. The production reader uses ZIP64 random access, imposes decompression limits, and surfaces corrupt entries without failing the whole archive.
 
-The first production implementation now includes a native central-directory reader with ZIP64 offsets, stored-entry reads, raw DEFLATE support through a minimal zlib bridge, encryption rejection, and per-entry expansion limits. Every decoded stored or DEFLATE entry is checked against its central-directory CRC-32 before its bytes can reach parsing, preview, or export. A mismatch rejects only that entry; healthy entries remain independently readable. Compression methods other than stored and DEFLATE are never decoded and are counted from the central directory in archive diagnostics. It does not invoke `/usr/bin/unzip` or create a second expanded archive.
+The first production implementation now includes a native central-directory reader with ZIP64 offsets, stored-entry reads, raw DEFLATE support through a minimal zlib bridge, encryption rejection, and per-entry expansion limits. After cataloging, it keeps one read-only file descriptor and uses thread-safe `pread` calls, avoiding a fresh open and shared seek position for every message. Every decoded stored or DEFLATE entry is checked against its central-directory CRC-32 before its bytes can reach parsing, preview, or export. A mismatch rejects only that entry; healthy entries remain independently readable. Compression methods other than stored and DEFLATE are never decoded and are counted from the central directory in archive diagnostics. It does not invoke `/usr/bin/unzip` or create a second expanded archive.
 
 The source URL must only be opened for reading. File access is retained using a security-scoped bookmark. The archive fingerprint combines file size, modification time, and central-directory metadata so a stale index is never silently reused.
 
@@ -45,15 +45,15 @@ The OLM parser turns Outlook XML into normalized accounts, folders, messages, co
 
 ### Indexing
 
-SQLite stores normalized metadata and indexing checkpoints. FTS5 stores searchable subject, sender, To, CC, BCC, preview, body, and attachment-name text. Index construction is incremental, cancellable, resumable, and lower priority than interactive browsing.
+SQLite stores normalized metadata and indexing checkpoints. FTS5 stores searchable subject, sender, To, CC, BCC, preview, body, and attachment-name text. Index construction is incremental, cancellable, resumable, and lower priority than interactive browsing. Message archive reads, CRC checks, XML parsing, and attachment-reference normalization run through a bounded eight-worker pipeline. Indexing submits 32-message decode chunks, then performs ordered inserts through the single locked SQLite connection; interactive page/search reads pause submission of the next index chunk.
 
-The implemented index commits every 250 entries and records the next central-directory offset in the same transaction. Search is available while indexing continues and becomes complete when the final batch commits. Cache filenames use a stable fingerprint of the archive path, size, and modification date.
+The implemented index commits every 250 entries and records the next central-directory offset in the same transaction. Search is available while indexing continues and becomes complete when the final batch commits. Cancellation rolls back an in-flight transaction rather than advancing its checkpoint. Cache filenames use a stable fingerprint of the archive path, size, and modification date.
 
 No attachment payload is copied into the index. Derived document text is opt-in and records the exact archive entry and message identifier from which it came.
 
 ### Presentation
 
-The primary interface is a native three-column `NavigationSplitView`:
+The primary interface is a native three-column `NavigationSplitView`. Folder and search pages retain their requested order after parallel decoding, and the next 100-message page is requested 20 rows before the visible boundary:
 
 1. Accounts and folders
 2. Filterable message results

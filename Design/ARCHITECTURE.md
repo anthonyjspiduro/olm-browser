@@ -40,7 +40,7 @@ The source URL must only be opened for reading. File access is retained using a 
 
 The OLM parsers turn Outlook XML into normalized accounts, folders, messages, contacts, calendar items, and attachment references. Normalized message headers include sender, To/CC/BCC, sent and received dates, message ID, read/flag state, and attachment metadata. Contact normalization retains names, company/title, email addresses, phone numbers, notes, and modification date. Calendar normalization retains title, start/end, all-day/private flags, location, description, organizer, attendees, reminders, and basic recurrence metadata.
 
-XML parsing uses `XMLParser` event callbacks rather than constructing a DOM. Mail bodies remain lazy. `Contacts.xml` and `Calendar.xml` collections are cataloged from the central directory without decoding during archive opening, parsed only when the user selects the relevant collection, and cached in memory only for that archive-open session. A selected collection is filtered and returned to the UI in 100-record pages. Large aggregate calendar entries currently require their bounded decoded XML data and normalized records in memory for the first parse; persistent item indexing is planned.
+XML parsing uses `XMLParser` event callbacks rather than constructing a DOM. Mail bodies remain lazy. `Contacts.xml` and `Calendar.xml` collections are cataloged from the central directory without decoding during archive opening, parsed only when the user selects the relevant collection, and cached in memory only for that archive-open session. Contacts retain 100-record incremental list loading. Calendar mode deliberately loads the complete selected collection so its month grid and daily agenda cannot silently omit events beyond an initial page. Large aggregate calendar entries currently require their bounded decoded XML data and normalized records in memory for the first parse; persistent item indexing is planned.
 
 If an entry is truncated or malformed after at least one recognized field inside an OLM message container, fields completed before the XML error are retained as a recovered message and counted separately. XML without a recognized message container and field remains unreadable; neither case stops adjacent messages from loading or indexing.
 
@@ -54,7 +54,11 @@ No attachment payload is copied into the index. Derived document text is opt-in 
 
 ### Presentation
 
-The primary interface is a native three-column `NavigationSplitView` with Mail, Contacts, and Calendar modes. In Mail, indexed folder and search rows load without message-body decoding, retain their requested order, and hydrate their full message only when selected. Unindexed fallback pages retain their requested order after parallel decoding. Contact and calendar modes show their discovered collection sources, searchable 100-record lists, and a complete normalized detail view. The next page is requested before the visible boundary:
+The primary interface is a native three-column `NavigationSplitView` with a fixed bottom Mail, Calendar, and Contacts switcher. The buttons remain outside the scrolling source list, visibly identify the active mode, and provide Command-1 through Command-3 shortcuts. In Mail, indexed folder and search rows load without message-body decoding, retain their requested order, and hydrate their full message only when selected. Unindexed fallback pages retain their requested order after parallel decoding.
+
+Contacts use a compact avatar/name list and a native-style detail card with initials, title/company identity, grouped email/phone/note panels, copy controls, and explicit export actions. Calendar mode loads the complete selected collection before presentation, then displays a six-week month grid, Today and month navigation, per-day event indicators, a selected-day agenda, and full event detail. Month occurrence calculation runs away from the main actor and expands recognized daily, weekly, monthly, and yearly recurrence masters within the visible grid while honoring interval, occurrence-count, and end-date limits. Modified/cancelled recurrence exceptions remain a separate fidelity phase.
+
+The three columns are:
 
 1. Accounts/folders or contact/calendar collections
 2. Filterable message/contact/event results

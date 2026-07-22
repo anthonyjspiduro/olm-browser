@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct ContactListView: View {
@@ -6,11 +7,15 @@ struct ContactListView: View {
     var body: some View {
         List(selection: $store.selectedContactIDs) {
             ForEach(store.contacts) { contact in
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(contact.displayName).fontWeight(.medium).lineLimit(1)
-                    Text(contact.emails.first?.address ?? contact.company)
-                        .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                HStack(spacing: 10) {
+                    ContactAvatar(contact: contact, size: 34)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(contact.displayName).fontWeight(.medium).lineLimit(1)
+                        Text(contact.emails.first?.address ?? contact.company)
+                            .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
                 }
+                .padding(.vertical, 2)
                 .tag(contact.id)
                 .onAppear { store.itemDidAppear(contact.id) }
             }
@@ -59,88 +64,135 @@ struct ContactDetailView: View {
             }.frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if let contact = store.selectedContact {
             ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    HStack(alignment: .top) {
-                        Image(systemName: "person.crop.circle.fill").font(.system(size: 48)).foregroundStyle(.secondary)
-                        VStack(alignment: .leading) {
-                            Text(contact.displayName).font(.title2.bold()).textSelection(.enabled)
+                VStack(alignment: .leading, spacing: 20) {
+                    HStack(alignment: .center, spacing: 18) {
+                        ContactAvatar(contact: contact, size: 84)
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(contact.displayName).font(.largeTitle.bold()).textSelection(.enabled)
                             if !contact.jobTitle.isEmpty || !contact.company.isEmpty {
-                                Text([contact.jobTitle, contact.company].filter { !$0.isEmpty }.joined(separator: " · ")).foregroundStyle(.secondary)
+                                Text([contact.jobTitle, contact.company].filter { !$0.isEmpty }.joined(separator: " · "))
+                                    .font(.title3).foregroundStyle(.secondary).textSelection(.enabled)
                             }
                         }
                         Spacer()
-                        Menu("Export") {
+                        Menu {
                             Button("vCard") { store.exportContacts([contact], format: .vcf) }
                             Button("CSV") { store.exportContacts([contact], format: .csv) }
+                        } label: { Label("Export", systemImage: "square.and.arrow.up") }
+                    }
+
+                    if !contact.emails.isEmpty {
+                        ContactInformationCard(title: "Email", systemImage: "envelope.fill") {
+                            ForEach(contact.emails) { email in
+                                ContactValueRow(label: email.label, value: email.address, systemImage: "envelope")
+                            }
                         }
                     }
-                    detailSection("Email Addresses", rows: contact.emails.map { ($0.label, $0.address) })
-                    detailSection("Phone Numbers", rows: contact.phoneNumbers.map { ($0.label, $0.number) })
+                    if !contact.phoneNumbers.isEmpty {
+                        ContactInformationCard(title: "Phone", systemImage: "phone.fill") {
+                            ForEach(contact.phoneNumbers) { phone in
+                                ContactValueRow(label: phone.label, value: phone.number, systemImage: "phone")
+                            }
+                        }
+                    }
                     if !contact.notes.isEmpty {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Notes").font(.headline)
-                            Text(contact.notes).textSelection(.enabled)
+                        ContactInformationCard(title: "Notes", systemImage: "note.text") {
+                            Text(contact.notes)
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }
-                }.padding(24).frame(maxWidth: 760, alignment: .leading)
+                    if let modified = contact.modifiedAt {
+                        Label("Last modified \(modified.formatted(date: .long, time: .shortened))", systemImage: "clock")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                .padding(28)
+                .frame(maxWidth: 820, alignment: .leading)
             }
         } else { ContentUnavailableView("Select a Contact", systemImage: "person.crop.circle") }
     }
+}
 
-    @ViewBuilder private func detailSection(_ title: String, rows: [(String, String)]) -> some View {
-        if !rows.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-                Text(title).font(.headline)
-                Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 6) {
-                    ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-                        GridRow { Text(row.0).foregroundStyle(.secondary); Text(row.1).textSelection(.enabled) }
-                    }
-                }
-            }
+private struct ContactAvatar: View {
+    let contact: ContactRecord
+    let size: CGFloat
+
+    var body: some View {
+        Text(initials)
+            .font(.system(size: size * 0.34, weight: .semibold, design: .rounded))
+            .foregroundStyle(.white)
+            .frame(width: size, height: size)
+            .background(
+                LinearGradient(
+                    colors: [Color.accentColor, Color.accentColor.opacity(0.62)],
+                    startPoint: .topLeading, endPoint: .bottomTrailing
+                ),
+                in: Circle()
+            )
+            .overlay { Circle().stroke(.white.opacity(0.28), lineWidth: 1) }
+            .accessibilityHidden(true)
+    }
+
+    private var initials: String {
+        let components = contact.displayName.split(whereSeparator: \.isWhitespace)
+        let letters = [components.first?.first, components.count > 1 ? components.last?.first : nil]
+            .compactMap { $0 }
+        return letters.isEmpty ? "?" : String(letters).uppercased()
+    }
+}
+
+private struct ContactInformationCard<Content: View>: View {
+    let title: String
+    let systemImage: String
+    @ViewBuilder let content: Content
+
+    init(title: String, systemImage: String, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.systemImage = systemImage
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label(title, systemImage: systemImage).font(.headline)
+            Divider()
+            content
+        }
+        .padding(16)
+        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 12))
+        .overlay { RoundedRectangle(cornerRadius: 12).stroke(.separator.opacity(0.45)) }
+    }
+}
+
+private struct ContactValueRow: View {
+    let label: String
+    let value: String
+    let systemImage: String
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: systemImage)
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 20)
+            Text(label.isEmpty ? "Other" : label.capitalized)
+                .font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                .frame(width: 76, alignment: .leading)
+            Text(value).textSelection(.enabled)
+            Spacer(minLength: 8)
+            Button {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(value, forType: .string)
+            } label: { Image(systemName: "doc.on.doc") }
+            .buttonStyle(.borderless)
+            .help("Copy")
+            .accessibilityLabel("Copy \(label)")
         }
     }
 }
 
 struct CalendarEventListView: View {
-    @EnvironmentObject private var store: ArchiveStore
-
-    var body: some View {
-        List(selection: $store.selectedCalendarEventIDs) {
-            ForEach(store.calendarEvents) { event in
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(event.title).fontWeight(.medium).lineLimit(1)
-                    Text(event.startAt, format: .dateTime.month(.abbreviated).day().year().hour().minute())
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                .tag(event.id)
-                .onAppear { store.itemDidAppear(event.id) }
-            }
-            if store.isLoadingItems { HStack { Spacer(); ProgressView(); Spacer() }.padding() }
-        }
-        .overlay {
-            if !store.isLoadingItems && store.calendarEvents.isEmpty {
-                ContentUnavailableView("No Events", systemImage: "calendar", description: Text("This calendar contains no matching records."))
-            }
-        }
-        .toolbar {
-            if store.isExportingItems { ToolbarItem { ProgressView().controlSize(.small).help("Exporting records") } }
-            ToolbarItem {
-                Menu {
-                    Button("Selected Events as iCalendar") { store.exportCalendarEvents(store.selectedCalendarEvents, format: .ics) }
-                        .disabled(store.selectedCalendarEvents.isEmpty)
-                    Button("Selected Events as CSV") { store.exportCalendarEvents(store.selectedCalendarEvents, format: .csv) }
-                        .disabled(store.selectedCalendarEvents.isEmpty)
-                    Divider()
-                    Button("Loaded Events as iCalendar") { store.exportCalendarEvents(store.calendarEvents, format: .ics) }
-                    Button("Loaded Events as CSV") { store.exportCalendarEvents(store.calendarEvents, format: .csv) }
-                    Divider()
-                    Button("All Matching Events as iCalendar") { store.exportAllMatchingCalendarEvents(format: .ics) }
-                    Button("All Matching Events as CSV") { store.exportAllMatchingCalendarEvents(format: .csv) }
-                } label: { Label("Export Events", systemImage: "square.and.arrow.up") }
-                .disabled(store.calendarEvents.isEmpty || store.isExportingItems)
-            }
-        }
-    }
+    var body: some View { CalendarMonthView() }
 }
 
 struct CalendarEventDetailView: View {

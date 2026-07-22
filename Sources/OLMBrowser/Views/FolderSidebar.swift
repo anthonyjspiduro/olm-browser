@@ -4,57 +4,56 @@ struct FolderSidebar: View {
     @EnvironmentObject private var store: ArchiveStore
 
     var body: some View {
-        List(selection: $store.selectedFolderID) {
-            if let snapshot = store.snapshot {
-                Section {
-                    ArchiveHeader(identity: snapshot.identity)
-                    Picker("Section", selection: $store.browserMode) {
-                        ForEach(BrowserMode.allCases) { mode in
-                            Label(mode.label, systemImage: mode.symbolName).tag(mode)
-                        }
+        VStack(spacing: 0) {
+            List(selection: $store.selectedFolderID) {
+                if let snapshot = store.snapshot {
+                    Section {
+                        ArchiveHeader(identity: snapshot.identity)
                     }
-                    .pickerStyle(.menu)
-                }
 
-                switch store.browserMode {
-                case .mail:
-                    ForEach(snapshot.accounts) { account in
-                        Section(account.displayName) {
-                            OutlineGroup(folderTree(for: account.id), children: \.children) { node in
-                                FolderRow(
-                                    folder: node.folder,
-                                    showsUnreadCount: store.unreadCountsAreAccurate
-                                )
-                                    .tag(node.folder.id)
+                    switch store.browserMode {
+                    case .mail:
+                        ForEach(snapshot.accounts) { account in
+                            Section(account.displayName) {
+                                OutlineGroup(folderTree(for: account.id), children: \.children) { node in
+                                    FolderRow(
+                                        folder: node.folder,
+                                        showsUnreadCount: store.unreadCountsAreAccurate
+                                    )
+                                        .tag(node.folder.id)
+                                }
                             }
                         }
-                    }
-                case .contacts:
-                    Section("Contact Lists") {
-                        ForEach(snapshot.contactSources) { source in
-                            Button { store.selectedContactSourceID = source.id; store.itemSourceSelectionChanged() } label: {
-                                SourceLabel(source: source, systemImage: "person.2")
+                    case .contacts:
+                        Section("Contact Lists") {
+                            ForEach(snapshot.contactSources) { source in
+                                Button { store.selectedContactSourceID = source.id; store.itemSourceSelectionChanged() } label: {
+                                    SourceLabel(source: source, systemImage: "person.2")
+                                }
+                                .buttonStyle(.plain)
+                                .fontWeight(store.selectedContactSourceID == source.id ? .semibold : .regular)
                             }
-                            .buttonStyle(.plain)
-                            .fontWeight(store.selectedContactSourceID == source.id ? .semibold : .regular)
+                            if snapshot.contactSources.isEmpty { ContentUnavailableView("No Contacts", systemImage: "person.crop.circle.badge.xmark") }
                         }
-                        if snapshot.contactSources.isEmpty { ContentUnavailableView("No Contacts", systemImage: "person.crop.circle.badge.xmark") }
-                    }
-                case .calendar:
-                    Section("Calendars") {
-                        ForEach(snapshot.calendarSources) { source in
-                            Button { store.selectedCalendarSourceID = source.id; store.itemSourceSelectionChanged() } label: {
-                                SourceLabel(source: source, systemImage: "calendar")
+                    case .calendar:
+                        Section("Calendars") {
+                            ForEach(snapshot.calendarSources) { source in
+                                Button { store.selectedCalendarSourceID = source.id; store.itemSourceSelectionChanged() } label: {
+                                    SourceLabel(source: source, systemImage: "calendar")
+                                }
+                                .buttonStyle(.plain)
+                                .fontWeight(store.selectedCalendarSourceID == source.id ? .semibold : .regular)
                             }
-                            .buttonStyle(.plain)
-                            .fontWeight(store.selectedCalendarSourceID == source.id ? .semibold : .regular)
+                            if snapshot.calendarSources.isEmpty { ContentUnavailableView("No Calendars", systemImage: "calendar.badge.exclamationmark") }
                         }
-                        if snapshot.calendarSources.isEmpty { ContentUnavailableView("No Calendars", systemImage: "calendar.badge.exclamationmark") }
                     }
                 }
             }
+            .listStyle(.sidebar)
+
+            Divider()
+            BrowserModeBar(selection: $store.browserMode)
         }
-        .listStyle(.sidebar)
         .onChange(of: store.selectedFolderID) {
             if store.browserMode == .mail { store.folderSelectionChanged() }
         }
@@ -74,6 +73,38 @@ struct FolderSidebar: View {
             }
         }
         return children(of: nil)
+    }
+}
+
+private struct BrowserModeBar: View {
+    @Binding var selection: BrowserMode
+
+    var body: some View {
+        HStack(spacing: 4) {
+            ForEach(BrowserMode.allCases) { mode in
+                Button {
+                    selection = mode
+                } label: {
+                    VStack(spacing: 4) {
+                        Image(systemName: mode.symbolName).font(.system(size: 16, weight: .semibold))
+                        Text(mode.label).font(.caption2.weight(.medium))
+                    }
+                    .foregroundStyle(selection == mode ? Color.accentColor : Color.secondary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+                    .background {
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(selection == mode ? Color.accentColor.opacity(0.14) : .clear)
+                    }
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut(KeyEquivalent(Character(String(BrowserMode.allCases.firstIndex(of: mode)! + 1))), modifiers: .command)
+                .accessibilityLabel(mode.label)
+                .accessibilityValue(selection == mode ? "Selected" : "")
+            }
+        }
+        .padding(7)
+        .background(.bar)
     }
 }
 

@@ -39,6 +39,8 @@ enum ContactCalendarArchiveCheck {
         var eventsWithAttendees = 0
         var recurringEvents = 0
         var exportSamples = 0
+        var monthGridSamples = 0
+        var renderedMonthOccurrences = 0
         for source in snapshot.calendarSources {
             let page = try reader.loadCalendarEvents(sourceID: source.id, matching: "", offset: 0, limit: Int.max)
             eventCount += page.totalCount
@@ -51,6 +53,13 @@ enum ContactCalendarArchiveCheck {
             if let sample = page.records.first {
                 let data = ContactCalendarExporter.calendarData([sample], format: .ics)
                 if String(decoding: data, as: UTF8.self).contains("BEGIN:VEVENT") { exportSamples += 1 }
+                if let month = Calendar.current.dateInterval(of: .month, for: sample.startAt) {
+                    let occurrences = CalendarOccurrenceEngine.occurrences(
+                        for: page.records, intersecting: month
+                    )
+                    if !occurrences.isEmpty { monthGridSamples += 1 }
+                    renderedMonthOccurrences += occurrences.count
+                }
             }
         }
         print("Calendar events parsed: \(eventCount)")
@@ -61,5 +70,7 @@ enum ContactCalendarArchiveCheck {
         print("Calendar events with attendees: \(eventsWithAttendees)")
         print("Recurring calendar events: \(recurringEvents)")
         print("Calendar collections with valid export samples: \(exportSamples)")
+        print("Calendar collections with populated month grids: \(monthGridSamples)")
+        print("Aggregate rendered month occurrences: \(renderedMonthOccurrences)")
     }
 }

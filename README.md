@@ -14,7 +14,7 @@ The reader has been validated against a 26 GB OLM containing 83,172 messages acr
 
 ## Current features
 
-- Native three-column SwiftUI interface
+- Native three-column SwiftUI interface with fixed bottom Mail, Calendar, and Contacts navigation (`⌘1`–`⌘3`)
 - Finder-launchable, ad-hoc-signed `OLM Browser.app`
 - `.olm` Finder document registration and Open dialog
 - Read-only ZIP64 central-directory parsing and random-access entry reads
@@ -70,8 +70,9 @@ The reader has been validated against a 26 GB OLM containing 83,172 messages acr
 - Message export as `.eml` (including available attachments), plain text, JSON, PDF, and CSV
 - Batch export of up to 1,000 currently loaded messages with a 1 GB output limit
 - Background archive opening, paging, search, and indexing
-- Contact-list discovery with lazy parsing, name/company/email/phone search, record previews, multi-selection, and individual/selected/loaded/all-matching vCard or CSV export
-- Calendar discovery with lazy parsing, event search, attendee/organizer/location/recurrence/reminder previews, multi-selection, and individual/selected/loaded/all-matching iCalendar or CSV export
+- Contact-list discovery with lazy parsing, name/company/email/phone search, native-style contact cards, labeled/copyable values, multi-selection, and individual/selected/loaded/all-matching vCard or CSV export
+- Calendar discovery with lazy parsing, a navigable month grid, Today control, selected-day agenda, event detail, attendee/organizer/location/recurrence/reminder previews, multi-selection, and individual/selected/loaded/all-matching iCalendar or CSV export
+- Basic daily, weekly, monthly, and yearly recurrence expansion in the visible calendar month; stored recurrence limits and end dates are honored
 - Contact and calendar collections are parsed only when their section is selected and retained only in memory for the current archive session
 - Standalone parser, archive-integrity, paging-performance, index-performance, attachment, export, diagnostics, structured-search, and FTS5 smoke checks
 - Synthetic contact/calendar parser and vCard/CSV/iCalendar export checks
@@ -118,6 +119,15 @@ swiftc Sources/OLMBrowser/Models/ArchiveModels.swift \
   -o /tmp/olm-contact-calendar-check && /tmp/olm-contact-calendar-check
 ```
 
+Run the calendar occurrence check:
+
+```sh
+swiftc Sources/OLMBrowser/Models/ArchiveModels.swift \
+  Sources/OLMBrowser/Services/CalendarOccurrenceEngine.swift \
+  Checks/CalendarOccurrenceSmokeCheck.swift \
+  -o /tmp/olm-calendar-occurrence-check && /tmp/olm-calendar-occurrence-check
+```
+
 ## Search behavior
 
 Full-text indexing begins after the archive folder catalog opens. Messages remain browsable while indexing runs. The index commits every 250 entries and records its next position in the same transaction, allowing interrupted indexing to resume safely.
@@ -161,7 +171,7 @@ The message Export menu supports EML, plain text, JSON, PDF, and CSV. “Export 
 
 - Embedded HTML navigation remains intentionally blocked; approved HTTPS links open outside the app.
 - The internal packaged build currently targets Apple Silicon.
-- Large calendar collections currently require a one-time in-memory parse when first selected; the complete 8-calendar/38,179-event validation took about 36 seconds and peaked near 533 MB on the development machine. An individual selected calendar normally requires only its share of that work. Persistent calendar indexing and detailed parse progress remain future work.
+- A complete selected calendar is loaded before its month grid is presented so day counts and agenda results are not based on a partial page. Large collections therefore require a one-time in-memory parse when first selected; the complete 8-calendar/38,179-event validation took about 36 seconds and peaked near 533 MB on the development machine. An individual selected calendar normally requires only its share of that work. Persistent calendar indexing and detailed parse progress remain future work.
 - iCalendar export preserves the normalized fields currently recognized by the parser. Complex Outlook recurrence exceptions and time-zone blobs require broader cross-version validation.
 - The managed Command Line Tools installation does not include XCTest, so checks are standalone executables.
 

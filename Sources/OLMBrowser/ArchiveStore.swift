@@ -4,8 +4,8 @@ import UniformTypeIdentifiers
 
 enum BrowserMode: String, CaseIterable, Identifiable {
     case mail
-    case contacts
     case calendar
+    case contacts
     var id: String { rawValue }
     var label: String { rawValue.capitalized }
     var symbolName: String {
@@ -641,7 +641,7 @@ final class ArchiveStore: ObservableObject {
                     if offset == 0 { selectedContactIDs = Set(page.records.prefix(1).map(\.id)) }
                 } else {
                     let page = try await Task.detached(priority: .userInitiated) {
-                        try reader.loadCalendarEvents(sourceID: sourceID, matching: query, offset: offset, limit: 100)
+                        try reader.loadCalendarEvents(sourceID: sourceID, matching: query, offset: offset, limit: Int.max)
                     }.value
                     guard !Task.isCancelled, browserMode == mode, selectedCalendarSourceID == sourceID,
                           searchText.trimmingCharacters(in: .whitespacesAndNewlines) == query else { return }

@@ -81,6 +81,8 @@ The index schema stores folder ID, sent timestamp, and attachment presence as un
 
 Archive opening and indexing run in cancelable tasks. The operations panel reports central-directory, message, attachment, duplicate-path, unreadable-message, index-progress, and cache-size counts. Rebuild clears the checkpoint and resumes indexing; Delete Cache removes indexed rows and compacts the disposable database.
 
+Diagnostic-report export is an explicit local Save action. The versioned JSON report contains only aggregate archive size, account/folder/message/attachment/duplicate/unreadable counts, search-index progress, cache size, generation time, and privacy declarations. It never includes the archive path or filename, account/folder names, message identifiers or content, participants, attachment names, payloads, or cache contents.
+
 Message export is explicit and local. Plain-text and JSON exports include normalized sender, To, CC, and BCC fields. RFC 822 `.eml` export preserves those participant headers, creates multipart plain/HTML content, and includes only resolved, size-bounded attachments.
 
 ### AI boundary
@@ -97,7 +99,7 @@ AI features operate on an explicit selection or query result set. Every generate
 
 ## Failure model
 
-A malformed message, attachment, or folder must be isolated as an entry-level diagnostic. The app should preserve all successfully browsable content and offer an exportable diagnostic report. Disk exhaustion pauses indexing without compromising the source archive.
+A malformed message, attachment, or folder must be isolated as an entry-level diagnostic. The app preserves all successfully browsable content and offers a privacy-preserving aggregate diagnostic report. Disk exhaustion pauses indexing without compromising the source archive.
 
 ## Delivery phases
 

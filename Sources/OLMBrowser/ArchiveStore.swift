@@ -265,6 +265,28 @@ final class ArchiveStore: ObservableObject {
         operationalStatus = reader.operationalStatus()
     }
 
+    func exportDiagnosticReport() {
+        guard let snapshot, let operationalStatus else {
+            errorMessage = "Archive diagnostics are not available yet."
+            return
+        }
+        let panel = NSSavePanel()
+        panel.title = "Export Diagnostic Report"
+        panel.nameFieldStringValue = "OLM Browser Diagnostics.json"
+        panel.allowedContentTypes = [.json]
+        guard panel.runModal() == .OK, let destination = panel.url else { return }
+        do {
+            let data = try DiagnosticReportExporter.data(
+                snapshot: snapshot,
+                status: operationalStatus,
+                indexProgress: indexProgress
+            )
+            try data.write(to: destination, options: [.atomic])
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
     func loadInlineImages(for message: MessageSummary) {
         inlineImageTask?.cancel()
         inlineImages = [:]

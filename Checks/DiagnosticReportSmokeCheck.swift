@@ -1,0 +1,84 @@
+import Foundation
+
+@main
+enum DiagnosticReportSmokeCheck {
+    static func main() throws {
+        let privateMarker = "private-sentinel-never-export"
+        let participant = MailParticipant(name: privateMarker, address: "\(privateMarker)@example.invalid")
+        let message = MessageSummary(
+            id: privateMarker,
+            folderID: privateMarker,
+            subject: privateMarker,
+            sender: participant,
+            recipients: [participant],
+            ccRecipients: [participant],
+            bccRecipients: [participant],
+            sentAt: Date(timeIntervalSince1970: 1_700_000_000),
+            preview: privateMarker,
+            body: privateMarker,
+            htmlBody: "<p>\(privateMarker)</p>",
+            isRead: false,
+            isFlagged: true,
+            attachments: [AttachmentSummary(
+                id: privateMarker,
+                filename: privateMarker,
+                byteCount: 42,
+                contentType: "application/octet-stream"
+            )]
+        )
+        let snapshot = ArchiveSnapshot(
+            identity: ArchiveIdentity(
+                url: URL(fileURLWithPath: "/private/\(privateMarker).olm"),
+                displayName: "\(privateMarker).olm",
+                size: 9_876_543,
+                isPreviewData: false
+            ),
+            accounts: [MailAccount(id: privateMarker, displayName: privateMarker, address: participant.address)],
+            folders: [MailFolder(
+                id: privateMarker,
+                accountID: privateMarker,
+                parentID: nil,
+                name: privateMarker,
+                kind: .inbox,
+                messageCount: 123,
+                unreadCount: 7
+            )],
+            messages: [message]
+        )
+        let status = ArchiveOperationalStatus(
+            archiveEntries: 456,
+            messageEntries: 123,
+            attachmentEntries: 89,
+            duplicateEntryPaths: 3,
+            failedMessageEntries: 2,
+            cacheByteCount: 4_096
+        )
+        let progress = IndexProgress(indexed: 120, total: 123, isComplete: false, failed: 2)
+        let data = try DiagnosticReportExporter.data(
+            snapshot: snapshot,
+            status: status,
+            indexProgress: progress,
+            generatedAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        let text = String(decoding: data, as: UTF8.self)
+        try require(!text.contains(privateMarker), "report excludes private identifiers and content")
+        let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        try require(object?["schemaVersion"] as? Int == 1, "schema version")
+        try require(object?["archiveByteCount"] as? Int == 9_876_543, "archive size")
+        try require(object?["messageEntries"] as? Int == 123, "message count")
+        try require(object?["searchIndexedEntries"] as? Int == 120, "index progress")
+        let privacy = object?["privacy"] as? [String: Any]
+        try require(privacy?.values.allSatisfy { ($0 as? Bool) == false } == true, "privacy declaration")
+        print("Privacy-preserving diagnostic report smoke check passed")
+    }
+
+    private static func require(_ condition: @autoclosure () -> Bool, _ description: String) throws {
+        guard condition() else { throw Failure("Failed: \(description)") }
+    }
+}
+
+private struct Failure: LocalizedError {
+    let message: String
+    init(_ message: String) { self.message = message }
+    var errorDescription: String? { message }
+}

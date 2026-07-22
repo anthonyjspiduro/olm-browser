@@ -56,9 +56,10 @@ The reader has been validated against a 26 GB OLM containing 83,172 messages acr
 - Cancelable archive opening and indexing
 - Search-index rebuild, cache deletion/compaction, and cache-size reporting
 - Archive entry, attachment payload, duplicate-path, and unreadable-message diagnostics
+- Explicit JSON diagnostic-report export containing aggregate health metrics only
 - Message export as `.eml` (including available attachments), plain text, and JSON
 - Background archive opening, paging, search, and indexing
-- Standalone parser, paging, attachment, export, structured-search, and FTS5 smoke checks
+- Standalone parser, paging, attachment, export, diagnostics, structured-search, and FTS5 smoke checks
 - Synthetic remote-image policy, CSP, local-CID, and per-message approval smoke checks
 
 ## Build and run
@@ -115,6 +116,7 @@ Search results load in 100-message pages. The message-list controls can restrict
 - Inline images are read only from resolved local attachment entries and served through a bounded, app-local WebKit scheme; unmatched CIDs remain blocked.
 - Remote image documents cannot read local attachment data: attachment bytes never enter the message HTML, scripts and connections are disabled, and the only newly permitted network requests are image loads to the selected message's HTTPS origin set.
 - Attachment and message exports happen only after an explicit user action.
+- Diagnostic reports are exported only after an explicit user action and omit archive paths, filenames, folder names, message content, participant data, attachment names, and attachment payloads.
 - Search indexes remain local in the user's cache directory.
 - AI and cloud services are not currently connected.
 
@@ -130,7 +132,7 @@ Search results load in 100-message pages. The message-list controls can restrict
 
 1. Add richer message headers, accurate unread totals, and globally chronological folder paging.
 2. Add explicit external-link opening with a confirmation boundary.
-3. Add PDF/CSV and batch message export plus exportable diagnostic reports.
+3. Add PDF/CSV and batch message export.
 4. Add CRC verification, unsupported-compression reporting, and more granular malformed-XML recovery.
 5. Add detailed phase/byte progress during initial archive opening.
 6. Add recent archives, drag-and-drop opening, and persistent security-scoped access.

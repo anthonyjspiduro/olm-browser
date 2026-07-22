@@ -16,14 +16,28 @@ enum ArchiveSmokeCheck {
             readerURL: url,
             folderID: folder.id
         )
-        print("Archive: \(snapshot.identity.displayName)")
+        let status = readerStatus(readerURL: url)
+        let report = try DiagnosticReportExporter.data(
+            snapshot: snapshot,
+            status: status,
+            indexProgress: IndexProgress(
+                indexed: 0,
+                total: snapshot.folders.reduce(0) { $0 + $1.messageCount },
+                isComplete: false
+            )
+        )
+        let reportText = String(decoding: report, as: UTF8.self)
+        guard !reportText.contains(snapshot.identity.url.path),
+              !reportText.contains(snapshot.identity.displayName) else {
+            throw CheckFailure("Diagnostic report exposed archive identity")
+        }
         print("Accounts: \(snapshot.accounts.count)")
         print("Folders: \(snapshot.folders.count)")
         print("Cataloged messages: \(snapshot.folders.reduce(0) { $0 + $1.messageCount })")
         print("Paging check: \(firstPage) unique messages across two pages")
-        let status = readerStatus(readerURL: url)
         print("Attachment payload entries: \(status.attachmentEntries)")
         print("Duplicate ZIP paths: \(status.duplicateEntryPaths)")
+        print("Aggregate diagnostic report privacy check passed")
     }
 
     private static func readerStatus(readerURL: URL) -> ArchiveOperationalStatus {

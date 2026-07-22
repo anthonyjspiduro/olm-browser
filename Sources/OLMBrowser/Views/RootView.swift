@@ -100,6 +100,9 @@ private struct ArchiveInformationView: View {
                 Button("Rebuild Index") { store.rebuildSearchIndex() }
                 Button("Delete Cache", role: .destructive) { store.deleteSearchCache() }
             }
+            Button("Export Diagnostics…") { store.exportDiagnosticReport() }
+                .disabled(store.operationalStatus == nil)
+                .help("Export aggregate archive and search health metrics without message content")
         }
         .padding(18)
         .frame(width: 390)

@@ -37,8 +37,25 @@ struct FolderSidebar: View {
                         }
                     case .calendar:
                         Section("Calendars") {
+                            Button {
+                                store.showsAllCalendarSources = true
+                                store.selectedCalendarSourceID = nil
+                                store.itemSourceSelectionChanged()
+                            } label: {
+                                HStack(spacing: 8) {
+                                    Image(systemName: "calendar.badge.plus")
+                                    Text("All Calendars")
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .fontWeight(store.showsAllCalendarSources ? .semibold : .regular)
+
                             ForEach(snapshot.calendarSources) { source in
-                                Button { store.selectedCalendarSourceID = source.id; store.itemSourceSelectionChanged() } label: {
+                                Button {
+                                    store.showsAllCalendarSources = false
+                                    store.selectedCalendarSourceID = source.id
+                                    store.itemSourceSelectionChanged()
+                                } label: {
                                     SourceLabel(source: source, systemImage: "calendar")
                                 }
                                 .buttonStyle(.plain)

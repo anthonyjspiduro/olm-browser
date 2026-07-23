@@ -11,9 +11,40 @@ struct CalendarOccurrence: Identifiable, Hashable, Sendable {
         if endAt <= startAt { return range.contains(startAt) }
         return endAt > range.start && startAt < range.end
     }
+
+    var materializedEvent: CalendarEventRecord {
+        CalendarEventRecord(
+            id: id,
+            sourceID: event.sourceID,
+            title: event.title,
+            startAt: startAt,
+            endAt: endAt,
+            location: event.location,
+            details: event.details,
+            organizer: event.organizer,
+            attendees: event.attendees,
+            isAllDay: event.isAllDay,
+            isPrivate: event.isPrivate,
+            hasReminder: event.hasReminder,
+            reminderMinutes: event.reminderMinutes,
+            recurrence: nil,
+            seriesID: "",
+            calendarUID: event.calendarUID.isEmpty
+                ? ""
+                : "\(event.calendarUID)#\(Int64(startAt.timeIntervalSince1970))",
+            recurrenceID: nil,
+            isCancelled: event.isCancelled,
+            status: event.status,
+            timeZoneIdentifier: event.timeZoneIdentifier
+        )
+    }
 }
 
 enum CalendarOccurrenceEngine {
+    static func supportsRecurrenceFrequency(_ value: String) -> Bool {
+        recurrenceComponent(value) != nil
+    }
+
     static func occurrences(
         for events: [CalendarEventRecord],
         intersecting range: DateInterval,
@@ -60,22 +91,27 @@ enum CalendarOccurrenceEngine {
         let interval = max(1, recurrence.interval)
         let duration = max(0, event.endAt.timeIntervalSince(event.startAt))
         let countLimit = recurrence.occurrenceCount.flatMap { $0 > 0 ? $0 : nil } ?? Int.max
+        let recurrenceEnd = recurrence.endDate.flatMap { $0 >= event.startAt ? $0 : nil }
+        var recurrenceCalendar = calendar
+        if let timeZone = TimeZone(identifier: event.timeZoneIdentifier) {
+            recurrenceCalendar.timeZone = timeZone
+        }
         var occurrenceIndex = 0
         var start = event.startAt
 
         if start < range.start {
             let estimated = estimatedSkip(
                 from: start, to: range.start, component: component,
-                interval: interval, calendar: calendar
+                interval: interval, calendar: recurrenceCalendar
             )
             if estimated > 0, estimated < countLimit,
-               let advanced = calendar.date(byAdding: component, value: estimated * interval, to: start) {
+               let advanced = recurrenceCalendar.date(byAdding: component, value: estimated * interval, to: start) {
                 occurrenceIndex = estimated
                 start = advanced
             }
             while start.addingTimeInterval(duration) < range.start,
                   occurrenceIndex < countLimit,
-                  let next = calendar.date(byAdding: component, value: interval, to: start) {
+                  let next = recurrenceCalendar.date(byAdding: component, value: interval, to: start) {
                 occurrenceIndex += 1
                 start = next
             }
@@ -84,11 +120,11 @@ enum CalendarOccurrenceEngine {
         var result: [CalendarOccurrence] = []
         var safetyLimit = 0
         while occurrenceIndex < countLimit, start < range.end, safetyLimit < 10_000 {
-            if let recurrenceEnd = recurrence.endDate, start > recurrenceEnd { break }
+            if let recurrenceEnd, start > recurrenceEnd { break }
             let end = start.addingTimeInterval(duration)
             let occurrence = CalendarOccurrence(event: event, startAt: start, endAt: end)
             if occurrence.intersects(range) { result.append(occurrence) }
-            guard let next = calendar.date(byAdding: component, value: interval, to: start), next > start else { break }
+            guard let next = recurrenceCalendar.date(byAdding: component, value: interval, to: start), next > start else { break }
             occurrenceIndex += 1
             safetyLimit += 1
             start = next
@@ -106,10 +142,12 @@ enum CalendarOccurrenceEngine {
 
     private static func recurrenceComponent(_ value: String) -> Calendar.Component? {
         switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-        case "0", "daily", "day": .day
-        case "1", "weekly", "week": .weekOfYear
-        case "2", "3", "monthly", "month": .month
-        case "4", "5", "yearly", "annual", "year": .year
+        case "0", "daily", "day", "recursdaily", "opfrecurrencepatterndaily": .day
+        case "1", "weekly", "week", "recursweekly", "opfrecurrencepatternweekly": .weekOfYear
+        case "2", "3", "monthly", "month", "recursmonthly", "absolutemonthly",
+             "opfrecurrencepatternabsolutemonthly": .month
+        case "4", "5", "yearly", "annual", "year", "recursyearly", "absoluteyearly",
+             "opfrecurrencepatternabsoluteyearly": .year
         default: nil
         }
     }

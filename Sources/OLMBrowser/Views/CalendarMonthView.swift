@@ -1,5 +1,37 @@
 import SwiftUI
 
+struct CalendarWorkspaceRightView: View {
+    @EnvironmentObject private var store: ArchiveStore
+
+    var body: some View {
+        Group {
+            switch store.calendarWorkspaceViewMode {
+            case .month:
+                CalendarMonthView()
+            case .list:
+                CalendarChronologicalListView()
+            }
+        }
+        .overlay {
+            if store.isLoadingItems && store.calendarEvents.isEmpty {
+                ArchiveItemLoadingView()
+            }
+        }
+        .toolbar {
+            ToolbarItem {
+                Picker("Calendar View", selection: $store.calendarWorkspaceViewMode) {
+                    ForEach(CalendarWorkspaceViewMode.allCases) { mode in
+                        Text(mode.label).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 150)
+                .help("Switch between month and chronological list views")
+            }
+        }
+    }
+}
+
 struct CalendarMonthView: View {
     @EnvironmentObject private var store: ArchiveStore
     @State private var cachedOccurrences: [CalendarOccurrence] = []
@@ -15,14 +47,7 @@ struct CalendarMonthView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .overlay {
-            if store.isLoadingItems && store.calendarEvents.isEmpty {
-                VStack(spacing: 12) {
-                    ProgressView()
-                    Text("Loading calendar…").font(.callout).foregroundStyle(.secondary)
-                }
-                .padding(24)
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
-            } else if !store.isLoadingItems && store.calendarEvents.isEmpty {
+            if !store.isLoadingItems && store.calendarEvents.isEmpty {
                 ContentUnavailableView(
                     "No Events", systemImage: "calendar",
                     description: Text("This calendar contains no matching records.")
@@ -174,6 +199,265 @@ struct CalendarMonthView: View {
             } label: { Label("Export Events", systemImage: "square.and.arrow.up") }
             .disabled(store.calendarEvents.isEmpty || store.isExportingItems)
         }
+    }
+}
+
+struct CalendarChronologicalListView: View {
+    @EnvironmentObject private var store: ArchiveStore
+    @State private var occurrences: [CalendarOccurrence] = []
+    @State private var selectedOccurrenceIDs: Set<CalendarOccurrence.ID> = []
+    @State private var isComputing = false
+    @State private var includesCancelled = true
+
+    private let calendar = Calendar.current
+
+    var body: some View {
+        VStack(spacing: 0) {
+            rangeControls
+            Divider()
+            if isComputing && occurrences.isEmpty {
+                ProgressView("Building occurrence list…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if occurrences.isEmpty {
+                ContentUnavailableView(
+                    "No Events in Range",
+                    systemImage: "calendar.badge.exclamationmark",
+                    description: Text("Adjust the dates, calendar source, or search.")
+                )
+            } else {
+                List(selection: $selectedOccurrenceIDs) {
+                    ForEach(dayGroups) { group in
+                        Section(group.date.formatted(date: .complete, time: .omitted)) {
+                            ForEach(group.occurrences) { occurrence in
+                                CalendarOccurrenceListRow(occurrence: occurrence)
+                                    .tag(occurrence.id)
+                                    .contentShape(Rectangle())
+                                    .onTapGesture { select(occurrence) }
+                            }
+                        }
+                    }
+                }
+                .listStyle(.inset)
+                .onChange(of: selectedOccurrenceIDs) { _, selectedIDs in
+                    let selectedEvents = occurrences
+                        .filter { selectedIDs.contains($0.id) }
+                        .map(\.event.id)
+                    store.selectedCalendarEventIDs = Set(selectedEvents)
+                }
+            }
+        }
+        .overlay(alignment: .topTrailing) {
+            if isComputing && !occurrences.isEmpty {
+                ProgressView().controlSize(.small).padding(12)
+            }
+        }
+        .task(id: listIdentity) {
+            isComputing = true
+            let events = store.calendarEvents
+            let range = selectedRange
+            let workingCalendar = calendar
+            let includeCancelled = includesCancelled
+            let computed = await Task.detached(priority: .userInitiated) {
+                var result = CalendarOccurrenceEngine.occurrences(
+                    for: events, intersecting: range, calendar: workingCalendar
+                )
+                if includeCancelled {
+                    result += events.filter(\.isCancelled).compactMap { event in
+                        let occurrence = CalendarOccurrence(
+                            event: event, startAt: event.startAt, endAt: event.endAt
+                        )
+                        return occurrence.intersects(range) ? occurrence : nil
+                    }
+                    result.sort {
+                        $0.startAt == $1.startAt
+                            ? $0.event.title.localizedCaseInsensitiveCompare($1.event.title) == .orderedAscending
+                            : $0.startAt < $1.startAt
+                    }
+                }
+                return result
+            }.value
+            guard !Task.isCancelled else { return }
+            occurrences = computed
+            selectedOccurrenceIDs.formIntersection(Set(computed.map(\.id)))
+            isComputing = false
+        }
+    }
+
+    private var rangeControls: some View {
+        VStack(spacing: 9) {
+            HStack(spacing: 10) {
+                DatePicker("From", selection: $store.calendarRangeStart, displayedComponents: .date)
+                DatePicker("Through", selection: $store.calendarRangeEnd, displayedComponents: .date)
+                Toggle("Canceled", isOn: $includesCancelled)
+                    .toggleStyle(.checkbox)
+                Spacer()
+                Text("\(occurrences.count.formatted()) occurrences")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            HStack(spacing: 8) {
+                Button("Today") { applyPreset(.today) }
+                Button("Next 30 Days") { applyPreset(.nextThirtyDays) }
+                Button("This Year") { applyPreset(.thisYear) }
+                Spacer()
+                Menu {
+                    Button("Range as iCalendar") {
+                        store.exportCalendarEvents(materializedRangeEvents, format: .ics)
+                    }
+                    Button("Range as CSV") {
+                        store.exportCalendarEvents(materializedRangeEvents, format: .csv)
+                    }
+                    Divider()
+                    Button("Selected Occurrences as iCalendar") {
+                        store.exportCalendarEvents(materializedSelectedOccurrences, format: .ics)
+                    }
+                    .disabled(materializedSelectedOccurrences.isEmpty)
+                    Button("Selected Occurrences as CSV") {
+                        store.exportCalendarEvents(materializedSelectedOccurrences, format: .csv)
+                    }
+                    .disabled(materializedSelectedOccurrences.isEmpty)
+                } label: {
+                    Label("Export Range", systemImage: "square.and.arrow.up")
+                }
+                .disabled(occurrences.isEmpty || store.isExportingItems)
+            }
+        }
+        .controlSize(.small)
+        .padding(10)
+    }
+
+    private var selectedRange: DateInterval {
+        let first = min(store.calendarRangeStart, store.calendarRangeEnd)
+        let last = max(store.calendarRangeStart, store.calendarRangeEnd)
+        let start = calendar.startOfDay(for: first)
+        let end = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: last))
+            ?? last.addingTimeInterval(86_400)
+        return DateInterval(start: start, end: end)
+    }
+
+    private var dayGroups: [CalendarOccurrenceDayGroup] {
+        Dictionary(grouping: occurrences) { calendar.startOfDay(for: $0.startAt) }
+            .map { CalendarOccurrenceDayGroup(date: $0.key, occurrences: $0.value) }
+            .sorted { $0.date < $1.date }
+    }
+
+    private var materializedRangeEvents: [CalendarEventRecord] {
+        occurrences.map(\.materializedEvent)
+    }
+
+    private var materializedSelectedOccurrences: [CalendarEventRecord] {
+        occurrences
+            .filter { selectedOccurrenceIDs.contains($0.id) }
+            .map(\.materializedEvent)
+    }
+
+    private var listIdentity: CalendarListIdentity {
+        CalendarListIdentity(
+            sourceID: store.selectedCalendarSourceID,
+            searchText: store.searchText,
+            eventCount: store.calendarEvents.count,
+            firstEventID: store.calendarEvents.first?.id,
+            lastEventID: store.calendarEvents.last?.id,
+            rangeStart: selectedRange.start,
+            rangeEnd: selectedRange.end,
+            includesCancelled: includesCancelled
+        )
+    }
+
+    private func select(_ occurrence: CalendarOccurrence) {
+        selectedOccurrenceIDs = [occurrence.id]
+        store.selectedCalendarEventIDs = [occurrence.event.id]
+        store.selectedCalendarDate = calendar.startOfDay(for: occurrence.startAt)
+        store.displayedCalendarMonth = calendar.startOfMonth(containing: occurrence.startAt)
+    }
+
+    private func applyPreset(_ preset: CalendarRangePreset) {
+        let today = calendar.startOfDay(for: Date())
+        switch preset {
+        case .today:
+            store.calendarRangeStart = today
+            store.calendarRangeEnd = today
+        case .nextThirtyDays:
+            store.calendarRangeStart = today
+            store.calendarRangeEnd = calendar.date(byAdding: .day, value: 30, to: today) ?? today
+        case .thisYear:
+            let year = calendar.dateInterval(of: .year, for: today)
+            store.calendarRangeStart = year?.start ?? today
+            store.calendarRangeEnd = year.flatMap {
+                calendar.date(byAdding: .day, value: -1, to: $0.end)
+            } ?? today
+        }
+    }
+}
+
+private enum CalendarRangePreset {
+    case today
+    case nextThirtyDays
+    case thisYear
+}
+
+private struct CalendarOccurrenceDayGroup: Identifiable {
+    let date: Date
+    let occurrences: [CalendarOccurrence]
+    var id: Date { date }
+}
+
+private struct CalendarListIdentity: Hashable {
+    let sourceID: String?
+    let searchText: String
+    let eventCount: Int
+    let firstEventID: String?
+    let lastEventID: String?
+    let rangeStart: Date
+    let rangeEnd: Date
+    let includesCancelled: Bool
+}
+
+private struct CalendarOccurrenceListRow: View {
+    let occurrence: CalendarOccurrence
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            VStack(alignment: .trailing, spacing: 2) {
+                Text(occurrence.event.isAllDay
+                     ? "All day"
+                     : occurrence.startAt.formatted(date: .omitted, time: .shortened))
+                    .font(.caption.monospacedDigit())
+                if !occurrence.event.isAllDay {
+                    Text(occurrence.endAt.formatted(date: .omitted, time: .shortened))
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(width: 64, alignment: .trailing)
+
+            Rectangle()
+                .fill(occurrence.event.isCancelled ? Color.red : Color.accentColor)
+                .frame(width: 3)
+                .clipShape(Capsule())
+
+            VStack(alignment: .leading, spacing: 3) {
+                HStack {
+                    Text(occurrence.event.title)
+                        .fontWeight(.medium)
+                    if occurrence.event.isCancelled {
+                        Text("Canceled")
+                            .font(.caption2.bold())
+                            .foregroundStyle(.red)
+                    }
+                    if occurrence.event.recurrence != nil {
+                        Image(systemName: "repeat").font(.caption2).foregroundStyle(.secondary)
+                    }
+                }
+                if !occurrence.event.location.isEmpty {
+                    Label(occurrence.event.location, systemImage: "mappin.and.ellipse")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .padding(.vertical, 3)
+        .accessibilityElement(children: .combine)
     }
 }
 

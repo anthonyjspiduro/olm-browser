@@ -19,14 +19,20 @@ enum ItemCacheSmokeCheck {
             emails: [.init(label: "work", address: "synthetic@example.invalid")],
             phoneNumbers: [.init(label: "work", number: "555-0100")],
             notes: "Synthetic only", modifiedAt: Date(timeIntervalSince1970: 100),
-            postalAddresses: [], birthday: nil, categories: ["Synthetic"]
+            postalAddresses: [], birthday: nil, categories: ["Synthetic"],
+            nickname: "Fixture", department: "Recovery", officeLocation: "Lab",
+            manager: "", assistant: "", spouse: "",
+            websites: ["https://example.invalid"], anniversary: nil,
+            isDistributionList: true,
+            groupMembers: [.init(name: "Member", address: "member@example.invalid")]
         )
         let event = CalendarEventRecord(
             id: "event-1", sourceID: "calendar.xml", title: "Synthetic Event",
             startAt: Date(timeIntervalSince1970: 200), endAt: Date(timeIntervalSince1970: 300),
             location: "Lab", details: "", organizer: "", attendees: [],
             isAllDay: false, isPrivate: false, hasReminder: false,
-            reminderMinutes: nil, recurrence: nil
+            reminderMinutes: nil, recurrence: nil,
+            timeZoneIdentifier: "America/New_York"
         )
 
         cache.storeContacts([contact], sourceID: "contacts.xml")

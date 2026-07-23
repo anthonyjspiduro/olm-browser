@@ -59,7 +59,21 @@ protocol OLMArchiveReading: Sendable {
     ) throws -> MessagePage
     func loadMessageDetails(for message: MessageSummary) throws -> MessageSummary
     func loadContacts(sourceID: ArchiveItemSource.ID?, matching query: String, offset: Int, limit: Int) throws -> ContactPage
+    func loadContacts(
+        sourceID: ArchiveItemSource.ID?,
+        matching query: String,
+        offset: Int,
+        limit: Int,
+        progress: @escaping @Sendable (ArchiveItemLoadProgress) -> Void
+    ) throws -> ContactPage
     func loadCalendarEvents(sourceID: ArchiveItemSource.ID?, matching query: String, offset: Int, limit: Int) throws -> CalendarEventPage
+    func loadCalendarEvents(
+        sourceID: ArchiveItemSource.ID?,
+        matching query: String,
+        offset: Int,
+        limit: Int,
+        progress: @escaping @Sendable (ArchiveItemLoadProgress) -> Void
+    ) throws -> CalendarEventPage
     func attachmentData(for attachment: AttachmentSummary) throws -> Data
     func operationalStatus() -> ArchiveOperationalStatus
     func folderUnreadCounts() -> [MailFolder.ID: Int]?
@@ -74,5 +88,25 @@ extension OLMArchiveReading {
     ) throws -> ArchiveSnapshot {
         progress(.init(phase: "Opening archive", completedUnits: 0, totalUnits: 0, bytesRead: 0, totalBytes: 0))
         return try openArchive(at: url)
+    }
+
+    func loadContacts(
+        sourceID: ArchiveItemSource.ID?,
+        matching query: String,
+        offset: Int,
+        limit: Int,
+        progress: @escaping @Sendable (ArchiveItemLoadProgress) -> Void
+    ) throws -> ContactPage {
+        try loadContacts(sourceID: sourceID, matching: query, offset: offset, limit: limit)
+    }
+
+    func loadCalendarEvents(
+        sourceID: ArchiveItemSource.ID?,
+        matching query: String,
+        offset: Int,
+        limit: Int,
+        progress: @escaping @Sendable (ArchiveItemLoadProgress) -> Void
+    ) throws -> CalendarEventPage {
+        try loadCalendarEvents(sourceID: sourceID, matching: query, offset: offset, limit: limit)
     }
 }

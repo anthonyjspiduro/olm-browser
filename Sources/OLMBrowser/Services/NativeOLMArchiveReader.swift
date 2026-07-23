@@ -19,6 +19,8 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
     private var checksumFailureEntryPaths: Set<String> = []
     private var contactsBySource: [ArchiveItemSource.ID: [ContactRecord]] = [:]
     private var eventsBySource: [ArchiveItemSource.ID: [CalendarEventRecord]] = [:]
+    private var failedContactSourceIDs: Set<ArchiveItemSource.ID> = []
+    private var failedCalendarSourceIDs: Set<ArchiveItemSource.ID> = []
 
     func openArchive(at url: URL) throws -> ArchiveSnapshot {
         try openArchive(at: url, progress: { _ in })
@@ -98,6 +100,8 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
             checksumFailureEntryPaths = []
             contactsBySource = [:]
             eventsBySource = [:]
+            failedContactSourceIDs = []
+            failedCalendarSourceIDs = []
         }
 
         return ArchiveSnapshot(
@@ -116,14 +120,29 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
     }
 
     func loadContacts(sourceID: ArchiveItemSource.ID?, matching query: String, offset: Int, limit: Int) throws -> ContactPage {
+        try loadContacts(
+            sourceID: sourceID, matching: query, offset: offset, limit: limit,
+            progress: { _ in }
+        )
+    }
+
+    func loadContacts(
+        sourceID: ArchiveItemSource.ID?,
+        matching query: String,
+        offset: Int,
+        limit: Int,
+        progress: @escaping @Sendable (ArchiveItemLoadProgress) -> Void
+    ) throws -> ContactPage {
         beginInteractiveRead()
         defer { endInteractiveRead() }
         let sources = stateLock.withLock {
             catalog.contactSources.filter { sourceID == nil || $0.id == sourceID }
         }
         var records: [ContactRecord] = []
+        let startedAt = Date()
         for source in sources {
-            records.append(contentsOf: try contacts(for: source))
+            if Task.isCancelled { throw CancellationError() }
+            records.append(contentsOf: try contacts(for: source, startedAt: startedAt, progress: progress))
         }
         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
         if !needle.isEmpty {
@@ -136,14 +155,29 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
     }
 
     func loadCalendarEvents(sourceID: ArchiveItemSource.ID?, matching query: String, offset: Int, limit: Int) throws -> CalendarEventPage {
+        try loadCalendarEvents(
+            sourceID: sourceID, matching: query, offset: offset, limit: limit,
+            progress: { _ in }
+        )
+    }
+
+    func loadCalendarEvents(
+        sourceID: ArchiveItemSource.ID?,
+        matching query: String,
+        offset: Int,
+        limit: Int,
+        progress: @escaping @Sendable (ArchiveItemLoadProgress) -> Void
+    ) throws -> CalendarEventPage {
         beginInteractiveRead()
         defer { endInteractiveRead() }
         let sources = stateLock.withLock {
             catalog.calendarSources.filter { sourceID == nil || $0.id == sourceID }
         }
         var records: [CalendarEventRecord] = []
+        let startedAt = Date()
         for source in sources {
-            records.append(contentsOf: try events(for: source))
+            if Task.isCancelled { throw CancellationError() }
+            records.append(contentsOf: try events(for: source, startedAt: startedAt, progress: progress))
         }
         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
         if !needle.isEmpty {
@@ -316,6 +350,31 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
     func operationalStatus() -> ArchiveOperationalStatus {
         stateLock.withLock {
             let entries = archive?.entries ?? []
+            let parsedContacts = contactsBySource.values.flatMap { $0 }
+            let parsedEvents = eventsBySource.values.flatMap { $0 }
+            let itemDiagnostics = ArchiveItemDiagnosticSummary(
+                parsedContactCollections: contactsBySource.count,
+                failedContactCollections: failedContactSourceIDs.count,
+                parsedContacts: parsedContacts.count,
+                contactsMissingNames: parsedContacts.count { $0.displayName == "Unnamed Contact" },
+                contactsWithEmail: parsedContacts.count { !$0.emails.isEmpty },
+                contactsWithPhone: parsedContacts.count { !$0.phoneNumbers.isEmpty },
+                contactsWithPostalAddress: parsedContacts.count { !$0.postalAddresses.isEmpty },
+                contactDistributionLists: parsedContacts.count { $0.isDistributionList },
+                parsedCalendarCollections: eventsBySource.count,
+                failedCalendarCollections: failedCalendarSourceIDs.count,
+                parsedCalendarEvents: parsedEvents.count,
+                calendarEventsMissingDates: parsedEvents.count { $0.startAt == .distantPast },
+                calendarEventsMissingTitles: parsedEvents.count { $0.title == "Untitled Event" },
+                recurringCalendarEvents: parsedEvents.count { $0.recurrence != nil },
+                unsupportedRecurrencePatterns: parsedEvents.count {
+                    guard let recurrence = $0.recurrence else { return false }
+                    return !CalendarOccurrenceEngine.supportsRecurrenceFrequency(recurrence.frequency)
+                },
+                recurrenceExceptions: parsedEvents.count { $0.recurrenceID != nil },
+                cancelledCalendarEvents: parsedEvents.count { $0.isCancelled },
+                calendarEventsWithTimeZones: parsedEvents.count { !$0.timeZoneIdentifier.isEmpty }
+            )
             return ArchiveOperationalStatus(
                 archiveEntries: entries.count,
                 messageEntries: catalog.messageEntriesByFolder.values.reduce(0) { $0 + $1.count },
@@ -327,7 +386,8 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
                 unsupportedCompressionEntries: entries.count {
                     $0.compressionMethod != 0 && $0.compressionMethod != 8
                 },
-                cacheByteCount: (searchIndex?.cacheByteCount ?? 0) + (itemCache?.byteCount ?? 0)
+                cacheByteCount: (searchIndex?.cacheByteCount ?? 0) + (itemCache?.byteCount ?? 0),
+                itemDiagnostics: itemDiagnostics
             )
         }
     }
@@ -378,42 +438,130 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
         }
     }
 
-    private func contacts(for source: ArchiveItemSource) throws -> [ContactRecord] {
+    private func contacts(
+        for source: ArchiveItemSource,
+        startedAt: Date,
+        progress: @escaping @Sendable (ArchiveItemLoadProgress) -> Void
+    ) throws -> [ContactRecord] {
         itemParseLock.lock()
         defer { itemParseLock.unlock() }
-        if let cached = stateLock.withLock({ contactsBySource[source.id] }) { return cached }
+        if let cached = stateLock.withLock({ contactsBySource[source.id] }) {
+            progress(itemProgress(
+                source: source, phase: "Using loaded contacts", bytes: 0, total: 0,
+                records: cached.count, startedAt: startedAt, cacheHit: true
+            ))
+            return cached
+        }
         if let cached = stateLock.withLock({ itemCache?.contacts(for: source.id) }) {
             stateLock.withLock { contactsBySource[source.id] = cached }
+            progress(itemProgress(
+                source: source, phase: "Loading cached contacts", bytes: 0, total: 0,
+                records: cached.count, startedAt: startedAt, cacheHit: true
+            ))
             return cached
         }
         let state = stateLock.withLock { (archive, allEntriesByPath[source.entryPath]?.first) }
         guard let archive = state.0, let entry = state.1 else { throw ArchiveReaderError.unreadableArchive }
-        let data = try archive.data(for: entry, maximumSize: Self.maximumItemCollectionSize)
-        let parsed = OLMContactParser().parse(data: data, source: source)
-        stateLock.withLock {
-            contactsBySource[source.id] = parsed
-            itemCache?.storeContacts(parsed, sourceID: source.id)
+        do {
+            progress(itemProgress(
+                source: source, phase: "Reading contact collection", bytes: 0,
+                total: entry.uncompressedSize, records: 0, startedAt: startedAt, cacheHit: false
+            ))
+            let data = try archive.data(for: entry, maximumSize: Self.maximumItemCollectionSize)
+            let parsed = OLMContactParser().parse(data: data, source: source) { count in
+                progress(self.itemProgress(
+                    source: source, phase: "Parsing contacts", bytes: UInt64(data.count),
+                    total: entry.uncompressedSize, records: count, startedAt: startedAt, cacheHit: false
+                ))
+            }
+            if Task.isCancelled { throw CancellationError() }
+            stateLock.withLock {
+                contactsBySource[source.id] = parsed
+                failedContactSourceIDs.remove(source.id)
+                itemCache?.storeContacts(parsed, sourceID: source.id)
+            }
+            progress(itemProgress(
+                source: source, phase: "Contact collection ready", bytes: UInt64(data.count),
+                total: entry.uncompressedSize, records: parsed.count, startedAt: startedAt, cacheHit: false
+            ))
+            return parsed
+        } catch {
+            if !(error is CancellationError) {
+                stateLock.withLock { _ = failedContactSourceIDs.insert(source.id) }
+            }
+            throw error
         }
-        return parsed
     }
 
-    private func events(for source: ArchiveItemSource) throws -> [CalendarEventRecord] {
+    private func events(
+        for source: ArchiveItemSource,
+        startedAt: Date,
+        progress: @escaping @Sendable (ArchiveItemLoadProgress) -> Void
+    ) throws -> [CalendarEventRecord] {
         itemParseLock.lock()
         defer { itemParseLock.unlock() }
-        if let cached = stateLock.withLock({ eventsBySource[source.id] }) { return cached }
+        if let cached = stateLock.withLock({ eventsBySource[source.id] }) {
+            progress(itemProgress(
+                source: source, phase: "Using loaded calendar", bytes: 0, total: 0,
+                records: cached.count, startedAt: startedAt, cacheHit: true
+            ))
+            return cached
+        }
         if let cached = stateLock.withLock({ itemCache?.calendarEvents(for: source.id) }) {
             stateLock.withLock { eventsBySource[source.id] = cached }
+            progress(itemProgress(
+                source: source, phase: "Loading cached calendar", bytes: 0, total: 0,
+                records: cached.count, startedAt: startedAt, cacheHit: true
+            ))
             return cached
         }
         let state = stateLock.withLock { (archive, allEntriesByPath[source.entryPath]?.first) }
         guard let archive = state.0, let entry = state.1 else { throw ArchiveReaderError.unreadableArchive }
-        let data = try archive.data(for: entry, maximumSize: Self.maximumItemCollectionSize)
-        let parsed = OLMCalendarParser().parse(data: data, source: source)
-        stateLock.withLock {
-            eventsBySource[source.id] = parsed
-            itemCache?.storeCalendarEvents(parsed, sourceID: source.id)
+        do {
+            progress(itemProgress(
+                source: source, phase: "Reading calendar collection", bytes: 0,
+                total: entry.uncompressedSize, records: 0, startedAt: startedAt, cacheHit: false
+            ))
+            let data = try archive.data(for: entry, maximumSize: Self.maximumItemCollectionSize)
+            let parsed = OLMCalendarParser().parse(data: data, source: source) { count in
+                progress(self.itemProgress(
+                    source: source, phase: "Parsing calendar events", bytes: UInt64(data.count),
+                    total: entry.uncompressedSize, records: count, startedAt: startedAt, cacheHit: false
+                ))
+            }
+            if Task.isCancelled { throw CancellationError() }
+            stateLock.withLock {
+                eventsBySource[source.id] = parsed
+                failedCalendarSourceIDs.remove(source.id)
+                itemCache?.storeCalendarEvents(parsed, sourceID: source.id)
+            }
+            progress(itemProgress(
+                source: source, phase: "Calendar collection ready", bytes: UInt64(data.count),
+                total: entry.uncompressedSize, records: parsed.count, startedAt: startedAt, cacheHit: false
+            ))
+            return parsed
+        } catch {
+            if !(error is CancellationError) {
+                stateLock.withLock { _ = failedCalendarSourceIDs.insert(source.id) }
+            }
+            throw error
         }
-        return parsed
+    }
+
+    private func itemProgress(
+        source: ArchiveItemSource,
+        phase: String,
+        bytes: UInt64,
+        total: UInt64,
+        records: Int,
+        startedAt: Date,
+        cacheHit: Bool
+    ) -> ArchiveItemLoadProgress {
+        ArchiveItemLoadProgress(
+            kind: source.kind, sourceName: source.name, phase: phase,
+            completedBytes: bytes, totalBytes: total, recordsDiscovered: records,
+            startedAt: startedAt, isCacheHit: cacheHit
+        )
     }
 
     private func parseConcurrently(

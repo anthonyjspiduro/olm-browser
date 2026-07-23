@@ -11,7 +11,9 @@ struct ContactListView: View {
                     ContactAvatar(contact: contact, size: 34)
                     VStack(alignment: .leading, spacing: 3) {
                         Text(contact.displayName).fontWeight(.medium).lineLimit(1)
-                        Text(contact.emails.first?.address ?? contact.company)
+                        Text(contact.isDistributionList
+                             ? "\(contact.groupMembers.count.formatted()) members"
+                             : (contact.emails.first?.address ?? contact.company))
                             .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                     }
                 }
@@ -24,7 +26,9 @@ struct ContactListView: View {
             }
         }
         .overlay {
-            if !store.isLoadingItems && store.contacts.isEmpty {
+            if store.isLoadingItems && store.contacts.isEmpty {
+                ArchiveItemLoadingView()
+            } else if !store.isLoadingItems && store.contacts.isEmpty {
                 ContentUnavailableView("No Contacts", systemImage: "person.crop.circle", description: Text("This contact list contains no matching records."))
             }
         }
@@ -49,6 +53,53 @@ struct ContactListView: View {
     }
 }
 
+struct ArchiveItemLoadingView: View {
+    @EnvironmentObject private var store: ArchiveStore
+
+    var body: some View {
+        VStack(spacing: 10) {
+            if let fraction = store.itemLoadProgress?.fractionCompleted {
+                ProgressView(value: fraction)
+                    .frame(width: 250)
+            } else {
+                ProgressView()
+                    .controlSize(.large)
+            }
+            Text(store.itemLoadProgress?.phase ?? "Loading collection…")
+                .font(.headline)
+            if let progress = store.itemLoadProgress {
+                Text(progress.sourceName)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                if progress.totalBytes > 0 {
+                    Text("\(ByteCountFormatter.string(fromByteCount: Int64(progress.completedBytes), countStyle: .file)) of \(ByteCountFormatter.string(fromByteCount: Int64(progress.totalBytes), countStyle: .file))")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                Text("\(progress.recordsDiscovered.formatted()) records discovered")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                TimelineView(.periodic(from: progress.startedAt, by: 1)) { context in
+                    Text("Elapsed \(Int(context.date.timeIntervalSince(progress.startedAt)).formatted()) seconds")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                if !progress.isCacheHit {
+                    Text("A successful first parse will be cached for faster reopening.")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            Button("Cancel") { store.cancelItemLoading() }
+        }
+        .padding(20)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .shadow(radius: 8)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Collection loading progress")
+    }
+}
+
 struct ContactDetailView: View {
     @EnvironmentObject private var store: ArchiveStore
 
@@ -70,8 +121,12 @@ struct ContactDetailView: View {
                         VStack(alignment: .leading, spacing: 5) {
                             Text(contact.displayName).font(.largeTitle.bold()).textSelection(.enabled)
                             if !contact.jobTitle.isEmpty || !contact.company.isEmpty {
-                                Text([contact.jobTitle, contact.company].filter { !$0.isEmpty }.joined(separator: " · "))
+                                Text([contact.jobTitle, contact.department, contact.company].filter { !$0.isEmpty }.joined(separator: " · "))
                                     .font(.title3).foregroundStyle(.secondary).textSelection(.enabled)
+                            }
+                            if contact.isDistributionList {
+                                Label("Distribution List", systemImage: "person.3.fill")
+                                    .foregroundStyle(.secondary)
                             }
                         }
                         Spacer()
@@ -106,7 +161,26 @@ struct ContactDetailView: View {
                             }
                         }
                     }
-                    if contact.birthday != nil || !contact.categories.isEmpty {
+                    if !contact.groupMembers.isEmpty {
+                        ContactInformationCard(title: "Members", systemImage: "person.3.fill") {
+                            ForEach(contact.groupMembers) { member in
+                                ContactValueRow(
+                                    label: member.name.isEmpty ? "Member" : member.name,
+                                    value: member.address.isEmpty ? member.name : member.address,
+                                    systemImage: "person"
+                                )
+                            }
+                        }
+                    }
+                    if !contact.websites.isEmpty {
+                        ContactInformationCard(title: "Websites", systemImage: "globe") {
+                            ForEach(contact.websites, id: \.self) { website in
+                                ContactValueRow(label: "Website", value: website, systemImage: "link")
+                            }
+                        }
+                    }
+                    if contact.birthday != nil || contact.anniversary != nil
+                        || !contact.categories.isEmpty || !additionalContactValues(contact).isEmpty {
                         ContactInformationCard(title: "Additional", systemImage: "person.text.rectangle") {
                             if let birthday = contact.birthday {
                                 ContactValueRow(
@@ -121,6 +195,16 @@ struct ContactDetailView: View {
                                     value: contact.categories.joined(separator: ", "),
                                     systemImage: "tag"
                                 )
+                            }
+                            if let anniversary = contact.anniversary {
+                                ContactValueRow(
+                                    label: "Anniversary",
+                                    value: anniversary.formatted(date: .long, time: .omitted),
+                                    systemImage: "calendar"
+                                )
+                            }
+                            ForEach(Array(additionalContactValues(contact).enumerated()), id: \.offset) { _, item in
+                                ContactValueRow(label: item.0, value: item.1, systemImage: item.2)
                             }
                         }
                     }
@@ -141,6 +225,16 @@ struct ContactDetailView: View {
             }
         } else { ContentUnavailableView("Select a Contact", systemImage: "person.crop.circle") }
     }
+
+    private func additionalContactValues(_ contact: ContactRecord) -> [(String, String, String)] {
+        [
+            ("Nickname", contact.nickname, "person.text.rectangle"),
+            ("Office", contact.officeLocation, "building.2"),
+            ("Manager", contact.manager, "person.crop.circle"),
+            ("Assistant", contact.assistant, "person.crop.circle"),
+            ("Spouse", contact.spouse, "person.crop.circle")
+        ].filter { !$0.1.isEmpty }
+    }
 }
 
 private struct ContactAvatar: View {
@@ -148,8 +242,15 @@ private struct ContactAvatar: View {
     let size: CGFloat
 
     var body: some View {
-        Text(initials)
-            .font(.system(size: size * 0.34, weight: .semibold, design: .rounded))
+        Group {
+            if contact.isDistributionList {
+                Image(systemName: "person.3.fill")
+                    .font(.system(size: size * 0.34, weight: .semibold))
+            } else {
+                Text(initials)
+                    .font(.system(size: size * 0.34, weight: .semibold, design: .rounded))
+            }
+        }
             .foregroundStyle(.white)
             .frame(width: size, height: size)
             .background(
@@ -269,7 +370,17 @@ struct CalendarEventDetailView: View {
                     }
                     if !event.organizer.isEmpty { labeled("Organizer", event.organizer) }
                     if !event.attendees.isEmpty { labeled("Attendees", event.attendees.map { $0.name.isEmpty ? $0.address : $0.name }.joined(separator: "\n")) }
-                    if let recurrence = event.recurrence { labeled("Recurrence", [recurrence.frequency, "every \(recurrence.interval)"].filter { !$0.isEmpty }.joined(separator: " · ")) }
+                    if let recurrence = event.recurrence {
+                        labeled("Recurrence", [recurrence.frequency, "every \(recurrence.interval)"].filter { !$0.isEmpty }.joined(separator: " · "))
+                        if !CalendarOccurrenceEngine.supportsRecurrenceFrequency(recurrence.frequency) {
+                            Label(
+                                "This Outlook recurrence pattern is not expanded. The stored master remains viewable and the diagnostic report counts it.",
+                                systemImage: "exclamationmark.triangle"
+                            )
+                            .font(.callout)
+                            .foregroundStyle(.orange)
+                        }
+                    }
                     if !event.details.isEmpty { labeled("Details", event.details) }
                 }.padding(24).frame(maxWidth: 820, alignment: .leading)
             }

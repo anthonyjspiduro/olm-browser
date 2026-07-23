@@ -90,6 +90,12 @@ struct ContactPostalAddress: Identifiable, Hashable, Codable, Sendable {
     }
 }
 
+struct ContactGroupMember: Identifiable, Hashable, Codable, Sendable {
+    var id: String { "\(name)|\(address)" }
+    let name: String
+    let address: String
+}
+
 struct ContactRecord: Identifiable, Hashable, Codable, Sendable {
     let id: String
     let sourceID: ArchiveItemSource.ID
@@ -106,13 +112,26 @@ struct ContactRecord: Identifiable, Hashable, Codable, Sendable {
     var postalAddresses: [ContactPostalAddress] = []
     var birthday: Date?
     var categories: [String] = []
+    var nickname: String = ""
+    var department: String = ""
+    var officeLocation: String = ""
+    var manager: String = ""
+    var assistant: String = ""
+    var spouse: String = ""
+    var websites: [String] = []
+    var anniversary: Date?
+    var isDistributionList: Bool = false
+    var groupMembers: [ContactGroupMember] = []
 
     var searchText: String {
-        ([displayName, firstName, middleName, lastName, company, jobTitle, notes]
+        ([displayName, firstName, middleName, lastName, company, jobTitle, notes,
+          nickname, department, officeLocation, manager, assistant, spouse]
             + emails.flatMap { [$0.label, $0.address] }
             + phoneNumbers.flatMap { [$0.label, $0.number] }
             + postalAddresses.flatMap { [$0.label, $0.formatted] }
-            + categories)
+            + categories
+            + websites
+            + groupMembers.flatMap { [$0.name, $0.address] })
             .joined(separator: " ")
     }
 }
@@ -149,6 +168,7 @@ struct CalendarEventRecord: Identifiable, Hashable, Codable, Sendable {
     let reminderMinutes: Int?
     let recurrence: CalendarRecurrence?
     var seriesID: String = ""
+    var calendarUID: String = ""
     var recurrenceID: Date?
     var isCancelled: Bool = false
     var status: String = ""
@@ -173,6 +193,54 @@ struct CalendarEventPage: Sendable {
     let nextOffset: Int
     let totalCount: Int
     var hasMore: Bool { nextOffset < totalCount }
+}
+
+struct ArchiveItemLoadProgress: Sendable {
+    let kind: ArchiveItemKind
+    let sourceName: String
+    let phase: String
+    let completedBytes: UInt64
+    let totalBytes: UInt64
+    let recordsDiscovered: Int
+    let startedAt: Date
+    let isCacheHit: Bool
+
+    var fractionCompleted: Double? {
+        guard totalBytes > 0 else { return nil }
+        return min(1, max(0, Double(completedBytes) / Double(totalBytes)))
+    }
+}
+
+struct ArchiveItemDiagnosticSummary: Sendable {
+    let parsedContactCollections: Int
+    let failedContactCollections: Int
+    let parsedContacts: Int
+    let contactsMissingNames: Int
+    let contactsWithEmail: Int
+    let contactsWithPhone: Int
+    let contactsWithPostalAddress: Int
+    let contactDistributionLists: Int
+    let parsedCalendarCollections: Int
+    let failedCalendarCollections: Int
+    let parsedCalendarEvents: Int
+    let calendarEventsMissingDates: Int
+    let calendarEventsMissingTitles: Int
+    let recurringCalendarEvents: Int
+    let unsupportedRecurrencePatterns: Int
+    let recurrenceExceptions: Int
+    let cancelledCalendarEvents: Int
+    let calendarEventsWithTimeZones: Int
+
+    static let empty = ArchiveItemDiagnosticSummary(
+        parsedContactCollections: 0, failedContactCollections: 0,
+        parsedContacts: 0, contactsMissingNames: 0, contactsWithEmail: 0,
+        contactsWithPhone: 0, contactsWithPostalAddress: 0, contactDistributionLists: 0,
+        parsedCalendarCollections: 0, failedCalendarCollections: 0,
+        parsedCalendarEvents: 0, calendarEventsMissingDates: 0,
+        calendarEventsMissingTitles: 0, recurringCalendarEvents: 0,
+        unsupportedRecurrencePatterns: 0, recurrenceExceptions: 0,
+        cancelledCalendarEvents: 0, calendarEventsWithTimeZones: 0
+    )
 }
 
 struct MailParticipant: Identifiable, Hashable, Sendable {
@@ -362,4 +430,5 @@ struct ArchiveOperationalStatus: Sendable {
     let checksumFailureEntries: Int
     let unsupportedCompressionEntries: Int
     let cacheByteCount: Int64
+    var itemDiagnostics: ArchiveItemDiagnosticSummary = .empty
 }

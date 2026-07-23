@@ -12,17 +12,27 @@ final class OLMContactParser: NSObject, XMLParserDelegate {
     private var emails: [ContactEmailAddress] = []
     private var phones: [ContactPhoneNumber] = []
     private var categories: [String] = []
+    private var websites: [String] = []
+    private var groupMembers: [ContactGroupMember] = []
+    private var progress: (@Sendable (Int) -> Void)?
 
-    func parse(data: Data, source: ArchiveItemSource) -> [ContactRecord] {
+    func parse(
+        data: Data,
+        source: ArchiveItemSource,
+        progress: (@Sendable (Int) -> Void)? = nil
+    ) -> [ContactRecord] {
         reset(source: source)
+        self.progress = progress
         let parser = XMLParser(data: data)
         parser.delegate = self
         parser.shouldResolveExternalEntities = false
         _ = parser.parse()
+        if !Task.isCancelled { progress?(records.count) }
         return records
     }
 
     func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?, qualifiedName qName: String?, attributes attributeDict: [String: String] = [:]) {
+        if Task.isCancelled { parser.abortParsing(); return }
         elements.append(elementName)
         text = ""
         if elementName == "contact" {
@@ -31,6 +41,8 @@ final class OLMContactParser: NSObject, XMLParserDelegate {
             emails = []
             phones = []
             categories = []
+            websites = []
+            groupMembers = []
         }
         if elementName == "contactEmailAddress" {
             let address = attributeDict["OPFContactEmailAddressAddress"] ?? ""
@@ -38,13 +50,34 @@ final class OLMContactParser: NSObject, XMLParserDelegate {
                 ?? attributeDict["OPFContactEmailAddressName"] ?? "Email"
             if !address.isEmpty { emails.append(.init(label: label, address: address)) }
         }
+        let lowerName = elementName.lowercased()
+        if inContact, lowerName.contains("member"), elementName != "contact" {
+            let address = Self.firstAttribute(
+                attributeDict,
+                names: [
+                    "OPFDistributionListMemberAddress", "OPFContactListMemberAddress",
+                    "OPFMemberAddress", "OPFContactEmailAddressAddress", "emailAddress", "address"
+                ]
+            )
+            let name = Self.firstAttribute(
+                attributeDict,
+                names: [
+                    "OPFDistributionListMemberName", "OPFContactListMemberName",
+                    "OPFMemberName", "OPFContactEmailAddressName", "displayName", "name"
+                ]
+            )
+            if !address.isEmpty || !name.isEmpty {
+                groupMembers.append(.init(name: name, address: address))
+            }
+        }
     }
 
     func parser(_ parser: XMLParser, foundCharacters string: String) { text += string }
 
     func parser(_ parser: XMLParser, didEndElement elementName: String, namespaceURI: String?, qualifiedName qName: String?) {
+        if Task.isCancelled { parser.abortParsing(); return }
         let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if inContact, elementName.hasPrefix("OPFContact"), !value.isEmpty {
+        if inContact, elementName.hasPrefix("OPF"), !value.isEmpty {
             fields[elementName] = value
             if ["phone", "fax", "pager", "telex"].contains(where: { elementName.localizedCaseInsensitiveContains($0) }) {
                 phones.append(.init(label: Self.readableLabel(elementName, removing: "OPFContactCopy"), number: value))
@@ -52,10 +85,19 @@ final class OLMContactParser: NSObject, XMLParserDelegate {
             if elementName.localizedCaseInsensitiveContains("category") {
                 categories.append(value)
             }
+            if elementName.localizedCaseInsensitiveContains("website")
+                || elementName.localizedCaseInsensitiveContains("webpage") {
+                websites.append(value)
+            }
         } else if inContact, elementName == "contactEmailAddress", !value.isEmpty,
                   !emails.contains(where: { $0.address == value }) {
             let mailbox = OLMItemMailboxParser.parse(value)
             emails.append(.init(label: "Email", address: mailbox.address))
+        } else if inContact, elementName.localizedCaseInsensitiveContains("member"), !value.isEmpty {
+            let mailbox = OLMItemMailboxParser.parse(value)
+            if !mailbox.address.isEmpty {
+                groupMembers.append(.init(name: mailbox.name, address: mailbox.address))
+            }
         } else if elementName == "contact", inContact {
             appendContact()
             inContact = false
@@ -70,7 +112,11 @@ final class OLMContactParser: NSObject, XMLParserDelegate {
         let middle = field("OPFContactCopyMiddleName")
         let last = field("OPFContactCopyLastName")
         let composed = [first, middle, last].filter { !$0.isEmpty }.joined(separator: " ")
-        let display = field("OPFContactCopyDisplayName")
+        let display = field(
+            "OPFContactCopyDisplayName",
+            "OPFContactCopyDistributionListName",
+            "OPFContactCopyGroupName"
+        )
         records.append(ContactRecord(
             id: "\(sourcePath)#contact-\(ordinal)", sourceID: sourceID,
             displayName: display.isEmpty ? (composed.isEmpty ? "Unnamed Contact" : composed) : display,
@@ -82,8 +128,19 @@ final class OLMContactParser: NSObject, XMLParserDelegate {
             modifiedAt: OLMItemDateParser.parse(field("OPFContactCopyModDate")),
             postalAddresses: ["Home", "Business", "Other"].compactMap(postalAddress),
             birthday: OLMItemDateParser.parse(field("OPFContactCopyBirthday", "OPFContactCopyBirthDate")),
-            categories: Self.unique(categories.flatMap(Self.splitCategories))
+            categories: Self.unique(categories.flatMap(Self.splitCategories)),
+            nickname: field("OPFContactCopyNickName", "OPFContactCopyNickname"),
+            department: field("OPFContactCopyBusinessDepartment", "OPFContactCopyDepartment"),
+            officeLocation: field("OPFContactCopyBusinessOffice", "OPFContactCopyOfficeLocation"),
+            manager: field("OPFContactCopyManagerName", "OPFContactCopyManager"),
+            assistant: field("OPFContactCopyAssistantName", "OPFContactCopyAssistant"),
+            spouse: field("OPFContactCopySpouseName", "OPFContactCopySpouse"),
+            websites: Self.unique(websites),
+            anniversary: OLMItemDateParser.parse(field("OPFContactCopyAnniversary")),
+            isDistributionList: isDistributionList,
+            groupMembers: Self.unique(groupMembers)
         ))
+        if records.count.isMultiple(of: 25) { progress?(records.count) }
     }
 
     private func field(_ names: String...) -> String {
@@ -94,7 +151,7 @@ final class OLMContactParser: NSObject, XMLParserDelegate {
     private func reset(source: ArchiveItemSource) {
         sourceID = source.id; sourcePath = source.entryPath; records = []; ordinal = 0
         inContact = false; elements = []; text = ""; fields = [:]; emails = []; phones = []
-        categories = []
+        categories = []; websites = []; groupMembers = []; progress = nil
     }
 
     private static func unique<T: Hashable>(_ values: [T]) -> [T] {
@@ -141,6 +198,24 @@ final class OLMContactParser: NSObject, XMLParserDelegate {
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
     }
+
+    private var isDistributionList: Bool {
+        !groupMembers.isEmpty || [
+            "OPFContactIsDistributionList", "OPFContactGetIsDistributionList",
+            "OPFContactCopyIsDistributionList"
+        ].contains { Self.boolean(fields[$0] ?? "") }
+    }
+
+    private static func boolean(_ value: String) -> Bool {
+        ["1", "true", "yes"].contains(value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
+    }
+
+    private static func firstAttribute(_ attributes: [String: String], names: [String]) -> String {
+        for name in names {
+            if let value = attributes[name], !value.isEmpty { return value }
+        }
+        return ""
+    }
 }
 
 final class OLMCalendarParser: NSObject, XMLParserDelegate {
@@ -152,17 +227,25 @@ final class OLMCalendarParser: NSObject, XMLParserDelegate {
     private var text = ""
     private var fields: [String: String] = [:]
     private var attendees: [CalendarAttendee] = []
+    private var progress: (@Sendable (Int) -> Void)?
 
-    func parse(data: Data, source: ArchiveItemSource) -> [CalendarEventRecord] {
+    func parse(
+        data: Data,
+        source: ArchiveItemSource,
+        progress: (@Sendable (Int) -> Void)? = nil
+    ) -> [CalendarEventRecord] {
         sourceID = source.id; sourcePath = source.entryPath; records = []; ordinal = 0
+        self.progress = progress
         let parser = XMLParser(data: data)
         parser.delegate = self
         parser.shouldResolveExternalEntities = false
         _ = parser.parse()
+        if !Task.isCancelled { progress?(records.count) }
         return records
     }
 
     func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?, qualifiedName qName: String?, attributes attributeDict: [String: String] = [:]) {
+        if Task.isCancelled { parser.abortParsing(); return }
         text = ""
         if elementName == "appointment" {
             inAppointment = true; fields = [:]; attendees = []
@@ -186,6 +269,7 @@ final class OLMCalendarParser: NSObject, XMLParserDelegate {
     func parser(_ parser: XMLParser, foundCharacters string: String) { text += string }
 
     func parser(_ parser: XMLParser, didEndElement elementName: String, namespaceURI: String?, qualifiedName qName: String?) {
+        if Task.isCancelled { parser.abortParsing(); return }
         let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if inAppointment, elementName.hasPrefix("OPF"), !value.isEmpty { fields[elementName] = value }
         if inAppointment, elementName == "appointmentAttendee", !value.isEmpty,
@@ -193,37 +277,69 @@ final class OLMCalendarParser: NSObject, XMLParserDelegate {
             let mailbox = OLMItemMailboxParser.parse(value)
             attendees.append(.init(name: mailbox.name, address: mailbox.address, type: "", status: "", responseRequested: false))
         }
-        if elementName == "appointment", inAppointment { appendEvent(); inAppointment = false }
+        if elementName == "appointment", inAppointment {
+            appendEvent()
+            if records.count.isMultiple(of: 100) { progress?(records.count) }
+            inAppointment = false
+        }
         text = ""
     }
 
     private func appendEvent() {
         ordinal += 1
-        let start = OLMItemDateParser.parse(field("OPFCalendarEventCopyStartTime")) ?? .distantPast
-        let end = OLMItemDateParser.parse(field("OPFCalendarEventCopyEndTime")) ?? start
+        let rawTimeZone = field(
+            "OPFCalendarEventCopyTimeZone",
+            "OPFCalendarEventCopyTimeZoneName",
+            "OPFCalendarEventCopyStartTimeZone"
+        )
+        let timeZoneIdentifier = OLMTimeZoneResolver.normalizedIdentifier(rawTimeZone)
+        let start = OLMItemDateParser.parse(
+            field("OPFCalendarEventCopyStartTime"),
+            timeZoneIdentifier: timeZoneIdentifier
+        ) ?? .distantPast
+        let isAllDay = boolean("OPFCalendarEventGetIsAllDayEvent")
+        let parsedEnd = OLMItemDateParser.parse(
+            field("OPFCalendarEventCopyEndTime"),
+            timeZoneIdentifier: timeZoneIdentifier
+        ) ?? start
+        let end: Date
+        if isAllDay, parsedEnd <= start {
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = TimeZone(identifier: timeZoneIdentifier) ?? TimeZone(secondsFromGMT: 0)!
+            end = calendar.date(byAdding: .day, value: 1, to: start) ?? start.addingTimeInterval(86_400)
+        } else {
+            end = parsedEnd
+        }
         let recurring = boolean("OPFCalendarEventIsRecurring")
         let recurrence = recurring ? CalendarRecurrence(
             frequency: field("OPFRecurrencePatternType"),
             interval: Int(field("OPFRecurrencePatternInterval")) ?? 1,
             occurrenceCount: Int(field("OPFRecurrenceGetOccurenceCount")),
-            endDate: OLMItemDateParser.parse(field("OPFRecurrenceCopyEndDate"))
+            endDate: OLMItemDateParser.parse(
+                field("OPFRecurrenceCopyEndDate"),
+                timeZoneIdentifier: timeZoneIdentifier
+            )
         ) : nil
         let uuid = field("OPFCalendarEventCopyUUID")
-        let recurrenceID = OLMItemDateParser.parse(field(
-            "OPFCalendarEventCopyRecurrenceID",
-            "OPFCalendarEventCopyOriginalStartTime"
-        ))
+        let recurrenceID = OLMItemDateParser.parse(
+            field(
+                "OPFCalendarEventCopyRecurrenceID",
+                "OPFCalendarEventCopyOriginalStartTime"
+            ),
+            timeZoneIdentifier: timeZoneIdentifier
+        )
         let status = field("OPFCalendarEventCopyStatus", "OPFCalendarEventGetStatus")
         let isCancelled = boolean("OPFCalendarEventGetIsCancelled")
             || boolean("OPFCalendarEventIsCancelled")
             || status.localizedCaseInsensitiveContains("cancel")
         let recordID: String
+        let scopedSeriesID = uuid.isEmpty ? "" : "\(sourcePath)#\(uuid)"
         if uuid.isEmpty {
             recordID = "\(sourcePath)#appointment-\(ordinal)"
         } else if let recurrenceID {
-            recordID = "\(uuid)#exception-\(recurrenceID.timeIntervalSinceReferenceDate)"
+            recordID = "\(scopedSeriesID)#exception-\(recurrenceID.timeIntervalSinceReferenceDate)"
         } else {
-            recordID = uuid
+            recordID = scopedSeriesID
         }
         records.append(CalendarEventRecord(
             id: recordID,
@@ -233,19 +349,16 @@ final class OLMCalendarParser: NSObject, XMLParserDelegate {
             location: field("OPFCalendarEventCopyLocation"),
             details: field("OPFCalendarEventCopyDescriptionPlain", "OPFCalendarEventCopyDescription"),
             organizer: field("OPFCalendarEventCopyOrganizer"), attendees: attendees,
-            isAllDay: boolean("OPFCalendarEventGetIsAllDayEvent"),
+            isAllDay: isAllDay,
             isPrivate: boolean("OPFCalendarEventGetIsPrivate"),
             hasReminder: boolean("OPFCalendarEventGetHasReminder"),
             reminderMinutes: Int(field("OPFCalendarEventCopyReminderDelta")), recurrence: recurrence,
-            seriesID: uuid,
+            seriesID: scopedSeriesID,
+            calendarUID: uuid,
             recurrenceID: recurrenceID,
             isCancelled: isCancelled,
             status: status,
-            timeZoneIdentifier: field(
-                "OPFCalendarEventCopyTimeZone",
-                "OPFCalendarEventCopyTimeZoneName",
-                "OPFCalendarEventCopyStartTimeZone"
-            )
+            timeZoneIdentifier: timeZoneIdentifier
         ))
     }
 
@@ -260,18 +373,68 @@ final class OLMCalendarParser: NSObject, XMLParserDelegate {
 }
 
 enum OLMItemDateParser {
-    static func parse(_ value: String) -> Date? {
+    static func parse(_ value: String, timeZoneIdentifier: String? = nil) -> Date? {
         let value = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return nil }
+        if value.hasPrefix("/Date("),
+           let expression = try? NSRegularExpression(pattern: #"/Date\((-?\d+)(?:[+-]\d{4})?\)/"#),
+           let match = expression.firstMatch(
+               in: value, range: NSRange(value.startIndex..<value.endIndex, in: value)
+           ),
+           let millisecondsRange = Range(match.range(at: 1), in: value),
+           let milliseconds = Double(value[millisecondsRange]) {
+            return Date(timeIntervalSince1970: milliseconds / 1_000)
+        }
         let fractional = ISO8601DateFormatter(); fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         if let date = fractional.date(from: value) ?? ISO8601DateFormatter().date(from: value) { return date }
-        for format in ["yyyy-MM-dd HH:mm:ss Z", "yyyy-MM-dd'T'HH:mm:ss", "yyyy-MM-dd HH:mm:ss", "yyyyMMdd'T'HHmmss'Z'"] {
+        let timeZone = timeZoneIdentifier.flatMap(TimeZone.init(identifier:))
+            ?? TimeZone(secondsFromGMT: 0)!
+        for format in [
+            "yyyy-MM-dd HH:mm:ss Z", "yyyy-MM-dd'T'HH:mm:ss.SSS",
+            "yyyy-MM-dd'T'HH:mm:ss", "yyyy-MM-dd HH:mm:ss",
+            "yyyyMMdd'T'HHmmss'Z'", "yyyyMMdd'T'HHmmssZ", "yyyyMMdd'T'HHmmss",
+            "yyyy-MM-dd"
+        ] {
             let parser = DateFormatter(); parser.locale = Locale(identifier: "en_US_POSIX")
-            parser.timeZone = TimeZone(secondsFromGMT: 0); parser.dateFormat = format
+            parser.calendar = Calendar(identifier: .gregorian)
+            parser.timeZone = timeZone; parser.dateFormat = format
             if let date = parser.date(from: value) { return date }
         }
         return nil
     }
+}
+
+enum OLMTimeZoneResolver {
+    static func normalizedIdentifier(_ value: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+        if TimeZone(identifier: trimmed) != nil { return trimmed }
+        let normalized = trimmed.lowercased()
+        return windowsMappings[normalized] ?? {
+            if normalized == "utc" || normalized == "gmt"
+                || normalized.contains("coordinated universal time") {
+                return "UTC"
+            }
+            return trimmed
+        }()
+    }
+
+    private static let windowsMappings: [String: String] = [
+        "eastern standard time": "America/New_York",
+        "central standard time": "America/Chicago",
+        "mountain standard time": "America/Denver",
+        "pacific standard time": "America/Los_Angeles",
+        "atlantic standard time": "America/Halifax",
+        "gmt standard time": "Europe/London",
+        "w. europe standard time": "Europe/Berlin",
+        "central europe standard time": "Europe/Budapest",
+        "romance standard time": "Europe/Paris",
+        "india standard time": "Asia/Kolkata",
+        "china standard time": "Asia/Shanghai",
+        "tokyo standard time": "Asia/Tokyo",
+        "aus eastern standard time": "Australia/Sydney",
+        "new zealand standard time": "Pacific/Auckland"
+    ]
 }
 
 enum OLMItemMailboxParser {

@@ -17,15 +17,21 @@ enum ContactCalendarArchiveCheck {
         var contactCount = 0
         var contactsWithEmail = 0
         var contactsWithPhone = 0
+        var distributionLists = 0
+        var distributionListMembers = 0
         for source in snapshot.contactSources {
             let page = try reader.loadContacts(sourceID: source.id, matching: "", offset: 0, limit: Int.max)
             contactCount += page.totalCount
             contactsWithEmail += page.records.count { !$0.emails.isEmpty }
             contactsWithPhone += page.records.count { !$0.phoneNumbers.isEmpty }
+            distributionLists += page.records.count { $0.isDistributionList }
+            distributionListMembers += page.records.reduce(0) { $0 + $1.groupMembers.count }
         }
         print("Contacts parsed: \(contactCount)")
         print("Contacts with email: \(contactsWithEmail)")
         print("Contacts with phone: \(contactsWithPhone)")
+        print("Distribution lists parsed: \(distributionLists)")
+        print("Distribution-list members parsed: \(distributionListMembers)")
 
         guard includesCalendar else {
             print("Calendar parsing skipped (pass --calendar for the large validation)")
@@ -38,9 +44,15 @@ enum ContactCalendarArchiveCheck {
         var eventsWithOrganizer = 0
         var eventsWithAttendees = 0
         var recurringEvents = 0
+        var eventsWithTimeZones = 0
+        var unsupportedRecurrences = 0
+        var recurrenceTypeCounts: [String: Int] = [:]
         var exportSamples = 0
         var monthGridSamples = 0
         var renderedMonthOccurrences = 0
+        var emptySampleCancelled = 0
+        var emptySampleInvalidRecurrenceEnd = 0
+        var emptySampleOther = 0
         for source in snapshot.calendarSources {
             let page = try reader.loadCalendarEvents(sourceID: source.id, matching: "", offset: 0, limit: Int.max)
             eventCount += page.totalCount
@@ -50,6 +62,14 @@ enum ContactCalendarArchiveCheck {
             eventsWithOrganizer += page.records.count { !$0.organizer.isEmpty }
             eventsWithAttendees += page.records.count { !$0.attendees.isEmpty }
             recurringEvents += page.records.count { $0.recurrence != nil }
+            for recurrence in page.records.compactMap(\.recurrence) {
+                recurrenceTypeCounts[recurrence.frequency, default: 0] += 1
+            }
+            eventsWithTimeZones += page.records.count { !$0.timeZoneIdentifier.isEmpty }
+            unsupportedRecurrences += page.records.count {
+                guard let recurrence = $0.recurrence else { return false }
+                return !CalendarOccurrenceEngine.supportsRecurrenceFrequency(recurrence.frequency)
+            }
             if let sample = page.records.first {
                 let data = ContactCalendarExporter.calendarData([sample], format: .ics)
                 if String(decoding: data, as: UTF8.self).contains("BEGIN:VEVENT") { exportSamples += 1 }
@@ -57,7 +77,16 @@ enum ContactCalendarArchiveCheck {
                     let occurrences = CalendarOccurrenceEngine.occurrences(
                         for: page.records, intersecting: month
                     )
-                    if !occurrences.isEmpty { monthGridSamples += 1 }
+                    if !occurrences.isEmpty {
+                        monthGridSamples += 1
+                    } else if sample.isCancelled {
+                        emptySampleCancelled += 1
+                    } else if let recurrenceEnd = sample.recurrence?.endDate,
+                              recurrenceEnd < sample.startAt {
+                        emptySampleInvalidRecurrenceEnd += 1
+                    } else {
+                        emptySampleOther += 1
+                    }
                     renderedMonthOccurrences += occurrences.count
                 }
             }
@@ -69,8 +98,19 @@ enum ContactCalendarArchiveCheck {
         print("Calendar events with organizers: \(eventsWithOrganizer)")
         print("Calendar events with attendees: \(eventsWithAttendees)")
         print("Recurring calendar events: \(recurringEvents)")
+        print("Calendar events with time zones: \(eventsWithTimeZones)")
+        print("Unsupported recurrence patterns: \(unsupportedRecurrences)")
+        for (type, count) in recurrenceTypeCounts.sorted(by: { $0.key < $1.key }) {
+            print("Recurrence type \(type.debugDescription): \(count)")
+        }
         print("Calendar collections with valid export samples: \(exportSamples)")
         print("Calendar collections with populated month grids: \(monthGridSamples)")
+        print("Empty samples canceled: \(emptySampleCancelled)")
+        print("Empty samples with invalid recurrence end: \(emptySampleInvalidRecurrenceEnd)")
+        print("Other empty samples: \(emptySampleOther)")
         print("Aggregate rendered month occurrences: \(renderedMonthOccurrences)")
+        let diagnostics = reader.operationalStatus().itemDiagnostics
+        print("Diagnostic contacts counted: \(diagnostics.parsedContacts)")
+        print("Diagnostic calendar events counted: \(diagnostics.parsedCalendarEvents)")
     }
 }

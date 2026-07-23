@@ -54,7 +54,7 @@ private struct BrowserView: View {
             switch store.browserMode {
             case .mail: MessageDetailView()
             case .contacts: ContactDetailView()
-            case .calendar: CalendarMonthView()
+            case .calendar: CalendarWorkspaceRightView()
             }
         }
         .navigationTitle(store.snapshot?.identity.displayName ?? "OLM Browser")
@@ -108,6 +108,17 @@ private struct ArchiveInformationView: View {
                     row("CRC failures", status.checksumFailureEntries.formatted())
                     row("Unsupported compression", status.unsupportedCompressionEntries.formatted())
                     row("Search cache", ByteCountFormatter.string(fromByteCount: status.cacheByteCount, countStyle: .file))
+                    Divider()
+                    row("Parsed contact collections", status.itemDiagnostics.parsedContactCollections.formatted())
+                    row("Failed contact collections", status.itemDiagnostics.failedContactCollections.formatted())
+                    row("Parsed contacts", status.itemDiagnostics.parsedContacts.formatted())
+                    row("Distribution lists", status.itemDiagnostics.contactDistributionLists.formatted())
+                    row("Parsed calendar collections", status.itemDiagnostics.parsedCalendarCollections.formatted())
+                    row("Failed calendar collections", status.itemDiagnostics.failedCalendarCollections.formatted())
+                    row("Parsed calendar events", status.itemDiagnostics.parsedCalendarEvents.formatted())
+                    row("Unsupported recurrence", status.itemDiagnostics.unsupportedRecurrencePatterns.formatted())
+                    row("Recurrence exceptions", status.itemDiagnostics.recurrenceExceptions.formatted())
+                    row("Canceled events", status.itemDiagnostics.cancelledCalendarEvents.formatted())
                 }
                 .font(.callout)
             }
@@ -131,7 +142,7 @@ private struct ArchiveInformationView: View {
                 .help("Export aggregate archive and search health metrics without message content")
         }
         .padding(18)
-        .frame(width: 390)
+        .frame(width: 420)
     }
 
     @ViewBuilder

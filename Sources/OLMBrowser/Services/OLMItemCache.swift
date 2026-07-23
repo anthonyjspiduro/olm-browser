@@ -3,7 +3,7 @@ import Foundation
 /// Disposable archive-specific cache for parsed contacts and calendar events.
 /// The source OLM remains authoritative and is never modified.
 final class OLMItemCache: @unchecked Sendable {
-    private static let schemaVersion = 2
+    private static let schemaVersion = 4
     private let directoryURL: URL
     private let lock = NSLock()
 

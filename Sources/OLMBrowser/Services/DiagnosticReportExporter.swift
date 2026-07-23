@@ -7,8 +7,9 @@ enum DiagnosticReportExporter {
         indexProgress: IndexProgress,
         generatedAt: Date = Date()
     ) throws -> Data {
+        let items = status.itemDiagnostics
         let report = Report(
-            schemaVersion: 2,
+            schemaVersion: 3,
             generatedAt: generatedAt,
             archiveByteCount: snapshot.identity.size,
             accountCount: snapshot.accounts.count,
@@ -27,11 +28,30 @@ enum DiagnosticReportExporter {
             searchUnreadableEntries: indexProgress.failed,
             searchIndexComplete: indexProgress.isComplete,
             searchCacheByteCount: status.cacheByteCount,
+            parsedContactCollections: items.parsedContactCollections,
+            failedContactCollections: items.failedContactCollections,
+            parsedContacts: items.parsedContacts,
+            contactsMissingNames: items.contactsMissingNames,
+            contactsWithEmail: items.contactsWithEmail,
+            contactsWithPhone: items.contactsWithPhone,
+            contactsWithPostalAddress: items.contactsWithPostalAddress,
+            contactDistributionLists: items.contactDistributionLists,
+            parsedCalendarCollections: items.parsedCalendarCollections,
+            failedCalendarCollections: items.failedCalendarCollections,
+            parsedCalendarEvents: items.parsedCalendarEvents,
+            calendarEventsMissingDates: items.calendarEventsMissingDates,
+            calendarEventsMissingTitles: items.calendarEventsMissingTitles,
+            recurringCalendarEvents: items.recurringCalendarEvents,
+            unsupportedRecurrencePatterns: items.unsupportedRecurrencePatterns,
+            recurrenceExceptions: items.recurrenceExceptions,
+            cancelledCalendarEvents: items.cancelledCalendarEvents,
+            calendarEventsWithTimeZones: items.calendarEventsWithTimeZones,
             privacy: PrivacyStatement(
                 containsArchivePath: false,
                 containsMessageContent: false,
                 containsParticipantData: false,
-                containsAttachmentNamesOrPayloads: false
+                containsAttachmentNamesOrPayloads: false,
+                containsContactOrCalendarContent: false
             )
         )
         let encoder = JSONEncoder()
@@ -60,6 +80,24 @@ enum DiagnosticReportExporter {
         let searchUnreadableEntries: Int
         let searchIndexComplete: Bool
         let searchCacheByteCount: Int64
+        let parsedContactCollections: Int
+        let failedContactCollections: Int
+        let parsedContacts: Int
+        let contactsMissingNames: Int
+        let contactsWithEmail: Int
+        let contactsWithPhone: Int
+        let contactsWithPostalAddress: Int
+        let contactDistributionLists: Int
+        let parsedCalendarCollections: Int
+        let failedCalendarCollections: Int
+        let parsedCalendarEvents: Int
+        let calendarEventsMissingDates: Int
+        let calendarEventsMissingTitles: Int
+        let recurringCalendarEvents: Int
+        let unsupportedRecurrencePatterns: Int
+        let recurrenceExceptions: Int
+        let cancelledCalendarEvents: Int
+        let calendarEventsWithTimeZones: Int
         let privacy: PrivacyStatement
     }
 
@@ -68,5 +106,6 @@ enum DiagnosticReportExporter {
         let containsMessageContent: Bool
         let containsParticipantData: Bool
         let containsAttachmentNamesOrPayloads: Bool
+        let containsContactOrCalendarContent: Bool
     }
 }

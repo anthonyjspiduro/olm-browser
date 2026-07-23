@@ -58,7 +58,18 @@ enum DiagnosticReportSmokeCheck {
             recoveredMalformedMessageEntries: 1,
             checksumFailureEntries: 4,
             unsupportedCompressionEntries: 5,
-            cacheByteCount: 4_096
+            cacheByteCount: 4_096,
+            itemDiagnostics: ArchiveItemDiagnosticSummary(
+                parsedContactCollections: 2, failedContactCollections: 1,
+                parsedContacts: 40, contactsMissingNames: 2, contactsWithEmail: 32,
+                contactsWithPhone: 21, contactsWithPostalAddress: 18,
+                contactDistributionLists: 3, parsedCalendarCollections: 4,
+                failedCalendarCollections: 1, parsedCalendarEvents: 500,
+                calendarEventsMissingDates: 2, calendarEventsMissingTitles: 3,
+                recurringCalendarEvents: 44, unsupportedRecurrencePatterns: 5,
+                recurrenceExceptions: 7, cancelledCalendarEvents: 8,
+                calendarEventsWithTimeZones: 450
+            )
         )
         let progress = IndexProgress(indexed: 120, total: 123, isComplete: false, failed: 2)
         let data = try DiagnosticReportExporter.data(
@@ -70,13 +81,17 @@ enum DiagnosticReportSmokeCheck {
         let text = String(decoding: data, as: UTF8.self)
         try require(!text.contains(privateMarker), "report excludes private identifiers and content")
         let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-        try require(object?["schemaVersion"] as? Int == 2, "schema version")
+        try require(object?["schemaVersion"] as? Int == 3, "schema version")
         try require(object?["archiveByteCount"] as? Int == 9_876_543, "archive size")
         try require(object?["messageEntries"] as? Int == 123, "message count")
         try require(object?["searchIndexedEntries"] as? Int == 120, "index progress")
         try require(object?["recoveredMalformedMessageEntries"] as? Int == 1, "recovered XML count")
         try require(object?["checksumFailureEntries"] as? Int == 4, "CRC failure count")
         try require(object?["unsupportedCompressionEntries"] as? Int == 5, "compression diagnostic count")
+        try require(object?["parsedContacts"] as? Int == 40, "parsed contact count")
+        try require(object?["contactDistributionLists"] as? Int == 3, "distribution-list count")
+        try require(object?["parsedCalendarEvents"] as? Int == 500, "parsed calendar count")
+        try require(object?["unsupportedRecurrencePatterns"] as? Int == 5, "recurrence diagnostic count")
         let privacy = object?["privacy"] as? [String: Any]
         try require(privacy?.values.allSatisfy { ($0 as? Bool) == false } == true, "privacy declaration")
         print("Privacy-preserving diagnostic report smoke check passed")

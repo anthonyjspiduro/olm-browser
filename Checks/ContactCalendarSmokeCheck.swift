@@ -14,6 +14,11 @@ enum ContactCalendarSmokeCheck {
           <OPFContactCopyLastName>Contact</OPFContactCopyLastName>
           <OPFContactCopyBusinessCompany>Example Org</OPFContactCopyBusinessCompany>
           <OPFContactCopyBusinessTitle>Technician</OPFContactCopyBusinessTitle>
+          <OPFContactCopyNickName>Recovery</OPFContactCopyNickName>
+          <OPFContactCopyBusinessDepartment>Operations</OPFContactCopyBusinessDepartment>
+          <OPFContactCopyBusinessOffice>Recovery Lab</OPFContactCopyBusinessOffice>
+          <OPFContactCopyManagerName>Test Manager</OPFContactCopyManagerName>
+          <OPFContactCopyBusinessWebPage>https://example.invalid/recovery</OPFContactCopyBusinessWebPage>
           <OPFContactCopyEmailAddressList>
             <contactEmailAddress OPFContactEmailAddressAddress="recovery@example.invalid" OPFContactEmailAddressType="work" />
           </OPFContactCopyEmailAddressList>
@@ -27,16 +32,32 @@ enum ContactCalendarSmokeCheck {
           <OPFContactCopyCategory>Recovery;VIP</OPFContactCopyCategory>
           <OPFContactCopyNotesPlain>Synthetic note</OPFContactCopyNotesPlain>
           <OPFContactCopyModDate>2026-07-22T14:30:00Z</OPFContactCopyModDate>
+        </contact>
+        <contact>
+          <OPFContactCopyDistributionListName>Recovery Team</OPFContactCopyDistributionListName>
+          <OPFContactIsDistributionList>1</OPFContactIsDistributionList>
+          <distributionListMember OPFDistributionListMemberName="Member One" OPFDistributionListMemberAddress="member1@example.invalid" />
+          <distributionListMember OPFDistributionListMemberName="Member Two" OPFDistributionListMemberAddress="member2@example.invalid" />
         </contact></contacts>
         """
-        let contacts = OLMContactParser().parse(data: Data(contactXML.utf8), source: contactSource)
-        require(contacts.count == 1, "contact count")
+        let contactProgress = ProgressRecorder()
+        let contacts = OLMContactParser().parse(
+            data: Data(contactXML.utf8), source: contactSource,
+            progress: { contactProgress.record($0) }
+        )
+        require(contacts.count == 2, "contact count")
         require(contacts[0].displayName == "Recovery Contact", "contact display name")
         require(contacts[0].emails.first?.address == "recovery@example.invalid", "contact email")
         require(contacts[0].phoneNumbers.first?.number == "555-0100", "contact phone")
         require(contacts[0].postalAddresses.first?.city == "Testville", "contact postal address")
         require(contacts[0].birthday != nil, "contact birthday")
         require(contacts[0].categories == ["Recovery", "VIP"], "contact categories")
+        require(contacts[0].nickname == "Recovery", "contact nickname")
+        require(contacts[0].department == "Operations", "contact department")
+        require(contacts[0].websites == ["https://example.invalid/recovery"], "contact website")
+        require(contacts[1].isDistributionList, "distribution-list recognition")
+        require(contacts[1].groupMembers.count == 2, "distribution-list members")
+        require(contactProgress.lastValue == contacts.count, "contact parse progress")
 
         let calendarSource = ArchiveItemSource(
             id: "synthetic-calendar", accountID: "synthetic@example.invalid",
@@ -63,18 +84,24 @@ enum ContactCalendarSmokeCheck {
           </OPFCalendarEventCopyRecurrence>
         </appointment></appointments>
         """
-        let events = OLMCalendarParser().parse(data: Data(calendarXML.utf8), source: calendarSource)
+        let calendarProgress = ProgressRecorder()
+        let events = OLMCalendarParser().parse(
+            data: Data(calendarXML.utf8), source: calendarSource,
+            progress: { calendarProgress.record($0) }
+        )
         require(events.count == 1, "calendar count")
         require(events[0].title == "Recovery Window", "calendar title")
         require(events[0].attendees.first?.address == "attendee@example.invalid", "calendar attendee")
         require(events[0].attendees.first?.responseRequested == true, "calendar attendee response request")
         require(OLMItemMailboxParser.parse("Test Person <person@example.invalid>").name == "Test Person", "mailbox display name")
         require(events[0].recurrence?.interval == 2, "calendar recurrence")
+        require(calendarProgress.lastValue == events.count, "calendar parse progress")
         require(OLMItemDateParser.parse("2026-07-22T15:00:00") != nil, "timezone-less Outlook date")
 
         let vcard = String(decoding: ContactCalendarExporter.contactData(contacts, format: .vcf), as: UTF8.self)
         require(vcard.contains("BEGIN:VCARD") && vcard.contains("EMAIL;TYPE=WORK:recovery@example.invalid"), "vCard export")
         require(vcard.contains("ADR;TYPE=BUSINESS") && vcard.contains("BDAY:19800412"), "vCard address and birthday")
+        require(vcard.contains("KIND:group") && vcard.contains("MEMBER:mailto:member1@example.invalid"), "vCard group export")
         let contactCSV = String(decoding: ContactCalendarExporter.contactData(contacts, format: .csv), as: UTF8.self)
         require(contactCSV.contains("\"Recovery Contact\"") && contactCSV.contains("\"555-0100\""), "contact CSV export")
         let ics = String(decoding: ContactCalendarExporter.calendarData(events, format: .ics), as: UTF8.self)
@@ -92,5 +119,22 @@ enum ContactCalendarSmokeCheck {
 
     private static func require(_ condition: @autoclosure () -> Bool, _ label: String) {
         guard condition() else { fatalError("Failed: \(label)") }
+    }
+}
+
+private final class ProgressRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+
+    var lastValue: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+
+    func record(_ newValue: Int) {
+        lock.lock()
+        value = newValue
+        lock.unlock()
     }
 }

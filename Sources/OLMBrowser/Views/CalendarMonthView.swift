@@ -13,6 +13,7 @@ struct CalendarMonthView: View {
             weekdayHeader
             monthGrid
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .overlay {
             if store.isLoadingItems && store.calendarEvents.isEmpty {
                 VStack(spacing: 12) {
@@ -115,23 +116,28 @@ struct CalendarMonthView: View {
     }
 
     private var monthGrid: some View {
-        LazyVGrid(columns: columns, spacing: 3) {
-            ForEach(visibleDays, id: \.self) { day in
-                CalendarDayCell(
-                    date: day,
-                    isInDisplayedMonth: calendar.isDate(day, equalTo: store.displayedCalendarMonth, toGranularity: .month),
-                    isSelected: calendar.isDate(day, inSameDayAs: store.selectedCalendarDate),
-                    isToday: calendar.isDateInToday(day),
-                    occurrences: occurrences(on: day)
-                ) {
-                    store.selectedCalendarDate = calendar.startOfDay(for: day)
-                    if !calendar.isDate(day, equalTo: store.displayedCalendarMonth, toGranularity: .month) {
-                        store.displayedCalendarMonth = calendar.startOfMonth(containing: day)
+        GeometryReader { geometry in
+            let rowHeight = max(56, (geometry.size.height - 15) / 6)
+            LazyVGrid(columns: columns, spacing: 3) {
+                ForEach(visibleDays, id: \.self) { day in
+                    CalendarDayCell(
+                        date: day,
+                        isInDisplayedMonth: calendar.isDate(day, equalTo: store.displayedCalendarMonth, toGranularity: .month),
+                        isSelected: calendar.isDate(day, inSameDayAs: store.selectedCalendarDate),
+                        isToday: calendar.isDateInToday(day),
+                        occurrences: occurrences(on: day),
+                        height: rowHeight
+                    ) {
+                        store.selectedCalendarDate = calendar.startOfDay(for: day)
+                        if !calendar.isDate(day, equalTo: store.displayedCalendarMonth, toGranularity: .month) {
+                            store.displayedCalendarMonth = calendar.startOfMonth(containing: day)
+                        }
                     }
                 }
             }
         }
         .padding(.horizontal, 7)
+        .padding(.bottom, 7)
     }
 
     private var rotatedWeekdaySymbols: [String] {
@@ -257,6 +263,7 @@ private struct CalendarDayCell: View {
     let isSelected: Bool
     let isToday: Bool
     let occurrences: [CalendarOccurrence]
+    let height: CGFloat
     let action: () -> Void
 
     var body: some View {
@@ -281,7 +288,7 @@ private struct CalendarDayCell: View {
                 Spacer(minLength: 0)
             }
             .padding(3)
-            .frame(maxWidth: .infinity, minHeight: 56, alignment: .topLeading)
+            .frame(maxWidth: .infinity, minHeight: height, maxHeight: height, alignment: .topLeading)
             .background(isSelected ? Color.accentColor.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 5))
             .overlay { RoundedRectangle(cornerRadius: 5).stroke(isSelected ? Color.accentColor : Color.secondary.opacity(0.16)) }
             .opacity(isInDisplayedMonth ? 1 : 0.55)

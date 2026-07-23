@@ -225,9 +225,9 @@ struct CalendarWorkspaceMiddleView: View {
     var body: some View {
         VSplitView {
             CalendarDayAgendaView()
-                .frame(minHeight: 180, idealHeight: 310)
+                .frame(minHeight: 150, idealHeight: 230, maxHeight: 280)
             CalendarEventDetailView()
-                .frame(minHeight: 220)
+                .frame(minHeight: 320, maxHeight: .infinity)
         }
     }
 }

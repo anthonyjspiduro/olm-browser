@@ -18,6 +18,13 @@ enum ContactCalendarSmokeCheck {
             <contactEmailAddress OPFContactEmailAddressAddress="recovery@example.invalid" OPFContactEmailAddressType="work" />
           </OPFContactCopyEmailAddressList>
           <OPFContactCopyBusinessPhone>555-0100</OPFContactCopyBusinessPhone>
+          <OPFContactCopyBusinessAddressStreet>100 Recovery Way</OPFContactCopyBusinessAddressStreet>
+          <OPFContactCopyBusinessAddressCity>Testville</OPFContactCopyBusinessAddressCity>
+          <OPFContactCopyBusinessAddressState>PA</OPFContactCopyBusinessAddressState>
+          <OPFContactCopyBusinessAddressPostalCode>19000</OPFContactCopyBusinessAddressPostalCode>
+          <OPFContactCopyBusinessAddressCountry>US</OPFContactCopyBusinessAddressCountry>
+          <OPFContactCopyBirthday>1980-04-12T00:00:00Z</OPFContactCopyBirthday>
+          <OPFContactCopyCategory>Recovery;VIP</OPFContactCopyCategory>
           <OPFContactCopyNotesPlain>Synthetic note</OPFContactCopyNotesPlain>
           <OPFContactCopyModDate>2026-07-22T14:30:00Z</OPFContactCopyModDate>
         </contact></contacts>
@@ -27,6 +34,9 @@ enum ContactCalendarSmokeCheck {
         require(contacts[0].displayName == "Recovery Contact", "contact display name")
         require(contacts[0].emails.first?.address == "recovery@example.invalid", "contact email")
         require(contacts[0].phoneNumbers.first?.number == "555-0100", "contact phone")
+        require(contacts[0].postalAddresses.first?.city == "Testville", "contact postal address")
+        require(contacts[0].birthday != nil, "contact birthday")
+        require(contacts[0].categories == ["Recovery", "VIP"], "contact categories")
 
         let calendarSource = ArchiveItemSource(
             id: "synthetic-calendar", accountID: "synthetic@example.invalid",
@@ -64,6 +74,7 @@ enum ContactCalendarSmokeCheck {
 
         let vcard = String(decoding: ContactCalendarExporter.contactData(contacts, format: .vcf), as: UTF8.self)
         require(vcard.contains("BEGIN:VCARD") && vcard.contains("EMAIL;TYPE=WORK:recovery@example.invalid"), "vCard export")
+        require(vcard.contains("ADR;TYPE=BUSINESS") && vcard.contains("BDAY:19800412"), "vCard address and birthday")
         let contactCSV = String(decoding: ContactCalendarExporter.contactData(contacts, format: .csv), as: UTF8.self)
         require(contactCSV.contains("\"Recovery Contact\"") && contactCSV.contains("\"555-0100\""), "contact CSV export")
         let ics = String(decoding: ContactCalendarExporter.calendarData(events, format: .ics), as: UTF8.self)

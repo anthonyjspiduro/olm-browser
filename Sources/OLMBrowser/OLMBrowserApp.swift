@@ -21,6 +21,18 @@ struct OLMBrowserApp: App {
                 }
                 .keyboardShortcut("o")
 
+                Menu("Open Recent") {
+                    if store.recentArchives.isEmpty {
+                        Text("No Recent Archives")
+                    } else {
+                        ForEach(store.recentArchives) { archive in
+                            Button(archive.displayName) {
+                                store.openRecentArchive(archive)
+                            }
+                        }
+                    }
+                }
+
                 if store.snapshot != nil {
                     Button("Close Archive") {
                         store.closeArchive()

@@ -19,7 +19,23 @@ enum CalendarOccurrenceEngine {
         intersecting range: DateInterval,
         calendar: Calendar = .current
     ) -> [CalendarOccurrence] {
-        events.flatMap { occurrences(for: $0, intersecting: range, calendar: calendar) }
+        let exceptions = Dictionary(grouping: events.filter { $0.recurrenceID != nil }) {
+            $0.seriesID.isEmpty ? $0.id : $0.seriesID
+        }
+        return events.flatMap { event -> [CalendarOccurrence] in
+            if event.recurrenceID != nil {
+                guard !event.isCancelled else { return [] }
+                return standaloneOccurrence(for: event, intersecting: range)
+            }
+            guard !event.isCancelled else { return [] }
+            let generated = occurrences(for: event, intersecting: range, calendar: calendar)
+            let seriesKey = event.seriesID.isEmpty ? event.id : event.seriesID
+            let replacedStarts = exceptions[seriesKey, default: []].compactMap(\.recurrenceID)
+            guard !replacedStarts.isEmpty else { return generated }
+            return generated.filter { occurrence in
+                !replacedStarts.contains { abs($0.timeIntervalSince(occurrence.startAt)) < 1 }
+            }
+        }
             .sorted { left, right in
                 left.startAt == right.startAt
                     ? left.event.title.localizedCaseInsensitiveCompare(right.event.title) == .orderedAscending
@@ -32,6 +48,9 @@ enum CalendarOccurrenceEngine {
         intersecting range: DateInterval,
         calendar: Calendar = .current
     ) -> [CalendarOccurrence] {
+        guard !event.isCancelled, event.recurrenceID == nil else {
+            return event.isCancelled ? [] : standaloneOccurrence(for: event, intersecting: range)
+        }
         guard let recurrence = event.recurrence,
               let component = recurrenceComponent(recurrence.frequency) else {
             let occurrence = CalendarOccurrence(event: event, startAt: event.startAt, endAt: event.endAt)
@@ -75,6 +94,14 @@ enum CalendarOccurrenceEngine {
             start = next
         }
         return result
+    }
+
+    private static func standaloneOccurrence(
+        for event: CalendarEventRecord,
+        intersecting range: DateInterval
+    ) -> [CalendarOccurrence] {
+        let occurrence = CalendarOccurrence(event: event, startAt: event.startAt, endAt: event.endAt)
+        return occurrence.intersects(range) ? [occurrence] : []
     }
 
     private static func recurrenceComponent(_ value: String) -> Calendar.Component? {

@@ -29,8 +29,25 @@ enum AttachmentAccessError: LocalizedError {
     }
 }
 
+struct ArchiveOpenProgress: Sendable {
+    let phase: String
+    let completedUnits: Int
+    let totalUnits: Int
+    let bytesRead: UInt64
+    let totalBytes: UInt64
+
+    var fractionCompleted: Double? {
+        guard totalUnits > 0 else { return nil }
+        return min(1, max(0, Double(completedUnits) / Double(totalUnits)))
+    }
+}
+
 protocol OLMArchiveReading: Sendable {
     func openArchive(at url: URL) throws -> ArchiveSnapshot
+    func openArchive(
+        at url: URL,
+        progress: @escaping @Sendable (ArchiveOpenProgress) -> Void
+    ) throws -> ArchiveSnapshot
     func loadMessages(in folderID: MailFolder.ID, offset: Int, limit: Int) throws -> MessagePage
     func buildSearchIndex(progress: @escaping @Sendable (IndexProgress) -> Void) throws
     func searchMessages(
@@ -48,4 +65,14 @@ protocol OLMArchiveReading: Sendable {
     func folderUnreadCounts() -> [MailFolder.ID: Int]?
     func resetSearchIndex() throws
     func deleteSearchCache() throws
+}
+
+extension OLMArchiveReading {
+    func openArchive(
+        at url: URL,
+        progress: @escaping @Sendable (ArchiveOpenProgress) -> Void
+    ) throws -> ArchiveSnapshot {
+        progress(.init(phase: "Opening archive", completedUnits: 0, totalUnits: 0, bytesRead: 0, totalBytes: 0))
+        return try openArchive(at: url)
+    }
 }

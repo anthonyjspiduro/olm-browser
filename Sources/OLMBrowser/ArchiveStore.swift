@@ -24,6 +24,7 @@ final class ArchiveStore: ObservableObject {
     @Published var isSearchFolderScoped = false
     @Published var errorMessage: String?
     @Published private(set) var isOpening = false
+    @Published private(set) var openProgress: ArchiveOpenProgress?
     @Published private(set) var isLoadingPage = false
     @Published private(set) var isSearching = false
     @Published private(set) var messages: [MessageSummary] = []
@@ -38,13 +39,19 @@ final class ArchiveStore: ObservableObject {
     @Published var selectedCalendarSourceID: ArchiveItemSource.ID?
     @Published var selectedContactIDs: Set<ContactRecord.ID> = []
     @Published var selectedCalendarEventIDs: Set<CalendarEventRecord.ID> = []
+    @Published var displayedCalendarMonth = Calendar.current.dateInterval(of: .month, for: Date())?.start ?? Date()
+    @Published var selectedCalendarDate = Calendar.current.startOfDay(for: Date())
     @Published private(set) var contacts: [ContactRecord] = []
     @Published private(set) var calendarEvents: [CalendarEventRecord] = []
     @Published private(set) var isLoadingItems = false
     @Published private(set) var itemResultTotal = 0
     @Published private(set) var isExportingItems = false
+    @Published private(set) var recentArchives: [RecentArchive] = []
 
     private let reader: any OLMArchiveReading
+    private let archiveAccess = ArchiveAccessManager()
+    private var activeSecurityScopedURL: URL?
+    private var activeURLDidStartSecurityScope = false
     private let pageSize = 100
     private var nextPageOffset = 0
     private var totalMessagesInFolder = 0
@@ -61,6 +68,7 @@ final class ArchiveStore: ObservableObject {
 
     init(reader: any OLMArchiveReading = NativeOLMArchiveReader()) {
         self.reader = reader
+        recentArchives = archiveAccess.recentArchives
     }
 
     var selectedFolder: MailFolder? {
@@ -103,25 +111,50 @@ final class ArchiveStore: ObservableObject {
 
     func open(_ url: URL) {
         guard !isOpening else { return }
+        guard url.isFileURL else {
+            errorMessage = "OLM Browser can only open local archive files."
+            return
+        }
         searchTask?.cancel()
         indexTask?.cancel()
         inlineImageTask?.cancel()
         messageDetailTask?.cancel()
         itemLoadTask?.cancel()
         isOpening = true
+        openProgress = .init(
+            phase: "Preparing archive", completedUnits: 0, totalUnits: 0,
+            bytesRead: 0, totalBytes: 0
+        )
         errorMessage = nil
         let reader = reader
+        let didStartSecurityScope = url.startAccessingSecurityScopedResource()
 
         openTask?.cancel()
         openTask = Task {
-            let worker = Task.detached(priority: .userInitiated) { try reader.openArchive(at: url) }
+            let worker = Task.detached(priority: .userInitiated) {
+                try reader.openArchive(at: url) { progress in
+                    Task { @MainActor [weak self] in
+                        guard self?.isOpening == true else { return }
+                        self?.openProgress = progress
+                    }
+                }
+            }
             do {
                 let loaded = try await withTaskCancellationHandler {
                     try await worker.value
                 } onCancel: {
                     worker.cancel()
                 }
-                guard !Task.isCancelled else { isOpening = false; return }
+                guard !Task.isCancelled else {
+                    if didStartSecurityScope { url.stopAccessingSecurityScopedResource() }
+                    isOpening = false
+                    return
+                }
+                releaseActiveSecurityScope()
+                activeSecurityScopedURL = url
+                activeURLDidStartSecurityScope = didStartSecurityScope
+                archiveAccess.remember(url)
+                recentArchives = archiveAccess.recentArchives
                 archiveSessionID = UUID()
                 unreadCountsAreAccurate = false
                 snapshot = loaded
@@ -138,9 +171,11 @@ final class ArchiveStore: ObservableObject {
                 if browserMode == .mail { loadNextPage() } else { loadNextItems() }
                 startIndexing()
             } catch {
+                if didStartSecurityScope { url.stopAccessingSecurityScopedResource() }
                 if !Task.isCancelled { errorMessage = error.localizedDescription }
             }
             isOpening = false
+            openProgress = nil
             refreshOperationalStatus()
         }
     }
@@ -148,6 +183,17 @@ final class ArchiveStore: ObservableObject {
     func cancelOpening() {
         openTask?.cancel()
         isOpening = false
+        openProgress = nil
+    }
+
+    func openRecentArchive(_ archive: RecentArchive) {
+        guard let url = archiveAccess.resolveRecent(id: archive.id) else {
+            archiveAccess.forget(id: archive.id)
+            recentArchives = archiveAccess.recentArchives
+            errorMessage = "The recent archive is no longer available. Choose it again to restore access."
+            return
+        }
+        open(url)
     }
 
     func folderSelectionChanged() {
@@ -324,6 +370,7 @@ final class ArchiveStore: ObservableObject {
         resetItemState()
         resetPageState()
         attachmentFiles.cleanupSession()
+        releaseActiveSecurityScope()
     }
 
     func applicationWillTerminate() {
@@ -334,6 +381,7 @@ final class ArchiveStore: ObservableObject {
         messageDetailTask?.cancel()
         itemLoadTask?.cancel()
         attachmentFiles.cleanupSession()
+        releaseActiveSecurityScope()
     }
 
     func cancelIndexing() { indexTask?.cancel() }
@@ -647,7 +695,14 @@ final class ArchiveStore: ObservableObject {
                           searchText.trimmingCharacters(in: .whitespacesAndNewlines) == query else { return }
                     if offset == 0 { calendarEvents = page.records } else { calendarEvents.append(contentsOf: page.records) }
                     nextItemOffset = page.nextOffset; itemResultTotal = page.totalCount
-                    if offset == 0 { selectedCalendarEventIDs = Set(page.records.prefix(1).map(\.id)) }
+                    if offset == 0 {
+                        selectedCalendarEventIDs = Set(page.records.prefix(1).map(\.id))
+                        if let first = page.records.first {
+                            selectedCalendarDate = Calendar.current.startOfDay(for: first.startAt)
+                            displayedCalendarMonth = Calendar.current.dateInterval(of: .month, for: first.startAt)?.start
+                                ?? selectedCalendarDate
+                        }
+                    }
                 }
             } catch {
                 if !Task.isCancelled { errorMessage = error.localizedDescription }
@@ -828,5 +883,13 @@ final class ArchiveStore: ObservableObject {
             messages: current.messages
         )
         unreadCountsAreAccurate = false
+    }
+
+    private func releaseActiveSecurityScope() {
+        if activeURLDidStartSecurityScope {
+            activeSecurityScopedURL?.stopAccessingSecurityScopedResource()
+        }
+        activeSecurityScopedURL = nil
+        activeURLDidStartSecurityScope = false
     }
 }

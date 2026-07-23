@@ -2,9 +2,6 @@ import SwiftUI
 
 struct CalendarMonthView: View {
     @EnvironmentObject private var store: ArchiveStore
-    @State private var displayedMonth = Calendar.current.startOfMonth(containing: Date())
-    @State private var selectedDate = Calendar.current.startOfDay(for: Date())
-    @State private var choseInitialArchiveDate = false
     @State private var cachedOccurrences: [CalendarOccurrence] = []
 
     private let calendar = Calendar.current
@@ -15,8 +12,6 @@ struct CalendarMonthView: View {
             monthHeader
             weekdayHeader
             monthGrid
-            Divider().padding(.top, 6)
-            agenda
         }
         .overlay {
             if store.isLoadingItems && store.calendarEvents.isEmpty {
@@ -33,8 +28,6 @@ struct CalendarMonthView: View {
                 )
             }
         }
-        .onAppear { chooseInitialArchiveDateIfNeeded() }
-        .onChange(of: store.calendarEvents.count) { chooseInitialArchiveDateIfNeeded() }
         .task(id: renderIdentity) {
             let events = store.calendarEvents
             let range = visibleRange
@@ -49,7 +42,7 @@ struct CalendarMonthView: View {
     }
 
     private var visibleDays: [Date] {
-        guard let monthInterval = calendar.dateInterval(of: .month, for: displayedMonth) else { return [] }
+        guard let monthInterval = calendar.dateInterval(of: .month, for: store.displayedCalendarMonth) else { return [] }
         let weekday = calendar.component(.weekday, from: monthInterval.start)
         let leading = (weekday - calendar.firstWeekday + 7) % 7
         let gridStart = calendar.date(byAdding: .day, value: -leading, to: monthInterval.start) ?? monthInterval.start
@@ -58,9 +51,9 @@ struct CalendarMonthView: View {
 
     private var visibleRange: DateInterval {
         let days = visibleDays
-        let start = days.first ?? displayedMonth
+        let start = days.first ?? store.displayedCalendarMonth
         let end = days.last.flatMap { calendar.date(byAdding: .day, value: 1, to: $0) }
-            ?? calendar.date(byAdding: .month, value: 1, to: displayedMonth) ?? displayedMonth
+            ?? calendar.date(byAdding: .month, value: 1, to: store.displayedCalendarMonth) ?? store.displayedCalendarMonth
         return DateInterval(start: start, end: end)
     }
 
@@ -75,29 +68,30 @@ struct CalendarMonthView: View {
             eventCount: store.calendarEvents.count,
             firstEventID: store.calendarEvents.first?.id,
             lastEventID: store.calendarEvents.last?.id,
-            displayedMonth: displayedMonth
+            displayedMonth: store.displayedCalendarMonth
         )
-    }
-
-    private var selectedDayOccurrences: [CalendarOccurrence] {
-        guard let interval = calendar.dateInterval(of: .day, for: selectedDate) else { return [] }
-        return visibleOccurrences.filter { $0.intersects(interval) }
     }
 
     private var monthHeader: some View {
         HStack(spacing: 8) {
             Button { moveMonth(-1) } label: { Image(systemName: "chevron.left") }
-                .buttonStyle(.borderless).help("Previous month")
+                .buttonStyle(.borderless)
+                .keyboardShortcut(.leftArrow, modifiers: [.command])
+                .help("Previous month (Command–Left Arrow)")
             Button("Today") {
                 let today = calendar.startOfDay(for: Date())
-                selectedDate = today
-                displayedMonth = calendar.startOfMonth(containing: today)
+                store.selectedCalendarDate = today
+                store.displayedCalendarMonth = calendar.startOfMonth(containing: today)
             }
             .controlSize(.small)
+            .keyboardShortcut("t", modifiers: [.command])
+            .help("Show today (Command–T)")
             Button { moveMonth(1) } label: { Image(systemName: "chevron.right") }
-                .buttonStyle(.borderless).help("Next month")
+                .buttonStyle(.borderless)
+                .keyboardShortcut(.rightArrow, modifiers: [.command])
+                .help("Next month (Command–Right Arrow)")
             Spacer()
-            Text(displayedMonth, format: .dateTime.month(.wide).year())
+            Text(store.displayedCalendarMonth, format: .dateTime.month(.wide).year())
                 .font(.title3.bold())
             Spacer()
             Text(store.itemResultTotal, format: .number)
@@ -125,47 +119,19 @@ struct CalendarMonthView: View {
             ForEach(visibleDays, id: \.self) { day in
                 CalendarDayCell(
                     date: day,
-                    isInDisplayedMonth: calendar.isDate(day, equalTo: displayedMonth, toGranularity: .month),
-                    isSelected: calendar.isDate(day, inSameDayAs: selectedDate),
+                    isInDisplayedMonth: calendar.isDate(day, equalTo: store.displayedCalendarMonth, toGranularity: .month),
+                    isSelected: calendar.isDate(day, inSameDayAs: store.selectedCalendarDate),
                     isToday: calendar.isDateInToday(day),
                     occurrences: occurrences(on: day)
                 ) {
-                    selectedDate = calendar.startOfDay(for: day)
-                    if !calendar.isDate(day, equalTo: displayedMonth, toGranularity: .month) {
-                        displayedMonth = calendar.startOfMonth(containing: day)
+                    store.selectedCalendarDate = calendar.startOfDay(for: day)
+                    if !calendar.isDate(day, equalTo: store.displayedCalendarMonth, toGranularity: .month) {
+                        store.displayedCalendarMonth = calendar.startOfMonth(containing: day)
                     }
                 }
             }
         }
         .padding(.horizontal, 7)
-    }
-
-    private var agenda: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text(selectedDate, format: .dateTime.weekday(.wide).month(.wide).day().year())
-                    .font(.headline)
-                Spacer()
-                Text(selectedDayOccurrences.count, format: .number)
-                    .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, 12).padding(.vertical, 8)
-
-            if selectedDayOccurrences.isEmpty {
-                Text("No events")
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                List(selection: $store.selectedCalendarEventIDs) {
-                    ForEach(selectedDayOccurrences) { occurrence in
-                        CalendarAgendaRow(occurrence: occurrence)
-                            .tag(occurrence.event.id)
-                    }
-                }
-                .listStyle(.inset)
-            }
-        }
-        .frame(minHeight: 150)
     }
 
     private var rotatedWeekdaySymbols: [String] {
@@ -180,16 +146,9 @@ struct CalendarMonthView: View {
     }
 
     private func moveMonth(_ value: Int) {
-        guard let month = calendar.date(byAdding: .month, value: value, to: displayedMonth) else { return }
-        displayedMonth = calendar.startOfMonth(containing: month)
-        selectedDate = displayedMonth
-    }
-
-    private func chooseInitialArchiveDateIfNeeded() {
-        guard !choseInitialArchiveDate, let first = store.calendarEvents.first else { return }
-        choseInitialArchiveDate = true
-        selectedDate = calendar.startOfDay(for: first.startAt)
-        displayedMonth = calendar.startOfMonth(containing: first.startAt)
+        guard let month = calendar.date(byAdding: .month, value: value, to: store.displayedCalendarMonth) else { return }
+        store.displayedCalendarMonth = calendar.startOfMonth(containing: month)
+        store.selectedCalendarDate = store.displayedCalendarMonth
     }
 
     @ToolbarContentBuilder private var exportToolbar: some ToolbarContent {
@@ -212,6 +171,68 @@ struct CalendarMonthView: View {
     }
 }
 
+struct CalendarDayAgendaView: View {
+    @EnvironmentObject private var store: ArchiveStore
+    @State private var occurrences: [CalendarOccurrence] = []
+    private let calendar = Calendar.current
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text(store.selectedCalendarDate, format: .dateTime.weekday(.wide).month(.wide).day().year())
+                    .font(.headline)
+                Spacer()
+                Text(occurrences.count, format: .number)
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+
+            Divider()
+
+            if occurrences.isEmpty {
+                ContentUnavailableView("No Events", systemImage: "calendar")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List(selection: $store.selectedCalendarEventIDs) {
+                    ForEach(occurrences) { occurrence in
+                        CalendarAgendaRow(occurrence: occurrence)
+                            .tag(occurrence.event.id)
+                    }
+                }
+                .listStyle(.inset)
+            }
+        }
+        .task(id: agendaIdentity) {
+            guard let range = calendar.dateInterval(of: .day, for: store.selectedCalendarDate) else {
+                occurrences = []
+                return
+            }
+            let events = store.calendarEvents
+            let workingCalendar = calendar
+            let computed = await Task.detached(priority: .userInitiated) {
+                CalendarOccurrenceEngine.occurrences(for: events, intersecting: range, calendar: workingCalendar)
+            }.value
+            guard !Task.isCancelled else { return }
+            occurrences = computed
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Events for selected day")
+    }
+
+    private var agendaIdentity: CalendarAgendaIdentity {
+        CalendarAgendaIdentity(
+            sourceID: store.selectedCalendarSourceID,
+            searchText: store.searchText,
+            eventCount: store.calendarEvents.count,
+            firstEventID: store.calendarEvents.first?.id,
+            lastEventID: store.calendarEvents.last?.id,
+            selectedDate: store.selectedCalendarDate
+        )
+    }
+}
+
 private struct CalendarRenderIdentity: Hashable {
     let sourceID: String?
     let searchText: String
@@ -219,6 +240,15 @@ private struct CalendarRenderIdentity: Hashable {
     let firstEventID: String?
     let lastEventID: String?
     let displayedMonth: Date
+}
+
+private struct CalendarAgendaIdentity: Hashable {
+    let sourceID: String?
+    let searchText: String
+    let eventCount: Int
+    let firstEventID: String?
+    let lastEventID: String?
+    let selectedDate: Date
 }
 
 private struct CalendarDayCell: View {
@@ -259,6 +289,7 @@ private struct CalendarDayCell: View {
         .buttonStyle(.plain)
         .accessibilityLabel(date.formatted(date: .complete, time: .omitted))
         .accessibilityValue("\(occurrences.count) events")
+        .accessibilityHint("Selects this date and updates the day agenda")
     }
 }
 
@@ -272,6 +303,7 @@ private struct CalendarAgendaRow: View {
                 HStack {
                     Text(occurrence.event.title).fontWeight(.medium).lineLimit(1)
                     if occurrence.event.recurrence != nil { Image(systemName: "repeat").font(.caption2).foregroundStyle(.secondary) }
+                    if occurrence.event.recurrenceID != nil { Image(systemName: "arrow.triangle.2.circlepath").font(.caption2).foregroundStyle(.secondary) }
                 }
                 Text(timeLabel)
                     .font(.caption).foregroundStyle(.secondary)
@@ -282,6 +314,8 @@ private struct CalendarAgendaRow: View {
             }
         }
         .padding(.vertical, 3)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(occurrence.event.title), \(timeLabel)")
     }
 
     private var timeLabel: String {

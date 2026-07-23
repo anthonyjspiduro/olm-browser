@@ -60,19 +60,37 @@ struct ArchiveItemSource: Identifiable, Hashable, Sendable {
     let entryPath: String
 }
 
-struct ContactEmailAddress: Identifiable, Hashable, Sendable {
+struct ContactEmailAddress: Identifiable, Hashable, Codable, Sendable {
     var id: String { "\(label)|\(address)" }
     let label: String
     let address: String
 }
 
-struct ContactPhoneNumber: Identifiable, Hashable, Sendable {
+struct ContactPhoneNumber: Identifiable, Hashable, Codable, Sendable {
     var id: String { "\(label)|\(number)" }
     let label: String
     let number: String
 }
 
-struct ContactRecord: Identifiable, Hashable, Sendable {
+struct ContactPostalAddress: Identifiable, Hashable, Codable, Sendable {
+    var id: String { "\(label)|\(street)|\(city)|\(region)|\(postalCode)|\(country)" }
+    let label: String
+    let street: String
+    let city: String
+    let region: String
+    let postalCode: String
+    let country: String
+
+    var formatted: String {
+        [
+            street,
+            [city, region, postalCode].filter { !$0.isEmpty }.joined(separator: ", "),
+            country
+        ].filter { !$0.isEmpty }.joined(separator: "\n")
+    }
+}
+
+struct ContactRecord: Identifiable, Hashable, Codable, Sendable {
     let id: String
     let sourceID: ArchiveItemSource.ID
     let displayName: String
@@ -85,16 +103,21 @@ struct ContactRecord: Identifiable, Hashable, Sendable {
     let phoneNumbers: [ContactPhoneNumber]
     let notes: String
     let modifiedAt: Date?
+    var postalAddresses: [ContactPostalAddress] = []
+    var birthday: Date?
+    var categories: [String] = []
 
     var searchText: String {
         ([displayName, firstName, middleName, lastName, company, jobTitle, notes]
             + emails.flatMap { [$0.label, $0.address] }
-            + phoneNumbers.flatMap { [$0.label, $0.number] })
+            + phoneNumbers.flatMap { [$0.label, $0.number] }
+            + postalAddresses.flatMap { [$0.label, $0.formatted] }
+            + categories)
             .joined(separator: " ")
     }
 }
 
-struct CalendarAttendee: Identifiable, Hashable, Sendable {
+struct CalendarAttendee: Identifiable, Hashable, Codable, Sendable {
     var id: String { "\(name)|\(address)|\(type)" }
     let name: String
     let address: String
@@ -103,14 +126,14 @@ struct CalendarAttendee: Identifiable, Hashable, Sendable {
     let responseRequested: Bool
 }
 
-struct CalendarRecurrence: Hashable, Sendable {
+struct CalendarRecurrence: Hashable, Codable, Sendable {
     let frequency: String
     let interval: Int
     let occurrenceCount: Int?
     let endDate: Date?
 }
 
-struct CalendarEventRecord: Identifiable, Hashable, Sendable {
+struct CalendarEventRecord: Identifiable, Hashable, Codable, Sendable {
     let id: String
     let sourceID: ArchiveItemSource.ID
     let title: String
@@ -125,6 +148,11 @@ struct CalendarEventRecord: Identifiable, Hashable, Sendable {
     let hasReminder: Bool
     let reminderMinutes: Int?
     let recurrence: CalendarRecurrence?
+    var seriesID: String = ""
+    var recurrenceID: Date?
+    var isCancelled: Bool = false
+    var status: String = ""
+    var timeZoneIdentifier: String = ""
 
     var searchText: String {
         ([title, location, details, organizer]

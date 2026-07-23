@@ -38,6 +38,15 @@ enum ContactCalendarExporter {
             for phone in contact.phoneNumbers {
                 lines.append("TEL;TYPE=\(token(phone.label)):\(vCard(phone.number))")
             }
+            for address in contact.postalAddresses {
+                lines.append(
+                    "ADR;TYPE=\(token(address.label)):;;\(vCard(address.street));\(vCard(address.city));\(vCard(address.region));\(vCard(address.postalCode));\(vCard(address.country))"
+                )
+            }
+            if let birthday = contact.birthday { lines.append("BDAY:\(day(birthday))") }
+            if !contact.categories.isEmpty {
+                lines.append("CATEGORIES:\(contact.categories.map(vCard).joined(separator: ","))")
+            }
             if !contact.notes.isEmpty { lines.append("NOTE:\(vCard(contact.notes))") }
             if let modified = contact.modifiedAt { lines.append("REV:\(utc(modified))") }
             lines.append("END:VCARD")
@@ -46,12 +55,15 @@ enum ContactCalendarExporter {
     }
 
     private static func contactCSV(_ contacts: [ContactRecord]) -> String {
-        let header = ["Display Name", "First Name", "Middle Name", "Last Name", "Company", "Job Title", "Email Addresses", "Phone Numbers", "Notes", "Modified"]
+        let header = ["Display Name", "First Name", "Middle Name", "Last Name", "Company", "Job Title", "Email Addresses", "Phone Numbers", "Postal Addresses", "Birthday", "Categories", "Notes", "Modified"]
         let rows = contacts.map { contact in
             [contact.displayName, contact.firstName, contact.middleName, contact.lastName,
              contact.company, contact.jobTitle,
              contact.emails.map { $0.address }.joined(separator: "; "),
-             contact.phoneNumbers.map { $0.number }.joined(separator: "; "), contact.notes,
+             contact.phoneNumbers.map { $0.number }.joined(separator: "; "),
+             contact.postalAddresses.map { "\($0.label): \($0.formatted.replacingOccurrences(of: "\n", with: ", "))" }.joined(separator: "; "),
+             contact.birthday.map(day) ?? "",
+             contact.categories.joined(separator: "; "), contact.notes,
              contact.modifiedAt.map(ISO8601DateFormatter().string) ?? ""]
         }
         return ([header] + rows).map { $0.map(csv).joined(separator: ",") }.joined(separator: "\r\n") + "\r\n"
@@ -61,7 +73,10 @@ enum ContactCalendarExporter {
         var lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//OLM Browser//Read-only recovery//EN", "CALSCALE:GREGORIAN"]
         for event in events {
             lines.append("BEGIN:VEVENT")
-            lines.append("UID:\(ical(event.id))")
+            lines.append("UID:\(ical(event.seriesID.isEmpty ? event.id : event.seriesID))")
+            if let recurrenceID = event.recurrenceID {
+                lines.append("RECURRENCE-ID:\(utc(recurrenceID))")
+            }
             if event.isAllDay {
                 lines.append("DTSTART;VALUE=DATE:\(day(event.startAt))")
                 lines.append("DTEND;VALUE=DATE:\(day(event.endAt))")
@@ -89,6 +104,11 @@ enum ContactCalendarExporter {
                 lines.append("ATTENDEE\(cn)\(role)\(status)\(rsvp):mailto:\(ical(attendee.address))")
             }
             if event.isPrivate { lines.append("CLASS:PRIVATE") }
+            if event.isCancelled { lines.append("STATUS:CANCELLED") }
+            else if !event.status.isEmpty { lines.append("X-OLM-STATUS:\(ical(event.status))") }
+            if !event.timeZoneIdentifier.isEmpty {
+                lines.append("X-OLM-TIMEZONE:\(ical(event.timeZoneIdentifier))")
+            }
             if let recurrence = event.recurrence, let frequency = recurrenceFrequency(recurrence.frequency) {
                 var rule = "FREQ=\(frequency);INTERVAL=\(max(1, recurrence.interval))"
                 if let count = recurrence.occurrenceCount, count > 0 { rule += ";COUNT=\(count)" }

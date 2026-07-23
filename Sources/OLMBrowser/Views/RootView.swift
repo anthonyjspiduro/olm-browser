@@ -25,6 +25,11 @@ struct RootView: View {
         .onOpenURL { url in
             store.open(url)
         }
+        .dropDestination(for: URL.self) { urls, _ in
+            guard let url = urls.first(where: \.isFileURL) else { return false }
+            store.open(url)
+            return true
+        } isTargeted: { _ in }
     }
 }
 
@@ -41,7 +46,7 @@ private struct BrowserView: View {
                 switch store.browserMode {
                 case .mail: MessageListView()
                 case .contacts: ContactListView()
-                case .calendar: CalendarEventListView()
+                case .calendar: CalendarWorkspaceMiddleView()
                 }
             }
             .navigationSplitViewColumnWidth(min: 300, ideal: 370, max: 520)
@@ -49,7 +54,7 @@ private struct BrowserView: View {
             switch store.browserMode {
             case .mail: MessageDetailView()
             case .contacts: ContactDetailView()
-            case .calendar: CalendarEventDetailView()
+            case .calendar: CalendarMonthView()
             }
         }
         .navigationTitle(store.snapshot?.identity.displayName ?? "OLM Browser")

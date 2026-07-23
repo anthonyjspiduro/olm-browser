@@ -11,6 +11,7 @@ final class OLMContactParser: NSObject, XMLParserDelegate {
     private var fields: [String: String] = [:]
     private var emails: [ContactEmailAddress] = []
     private var phones: [ContactPhoneNumber] = []
+    private var categories: [String] = []
 
     func parse(data: Data, source: ArchiveItemSource) -> [ContactRecord] {
         reset(source: source)
@@ -29,6 +30,7 @@ final class OLMContactParser: NSObject, XMLParserDelegate {
             fields = [:]
             emails = []
             phones = []
+            categories = []
         }
         if elementName == "contactEmailAddress" {
             let address = attributeDict["OPFContactEmailAddressAddress"] ?? ""
@@ -46,6 +48,9 @@ final class OLMContactParser: NSObject, XMLParserDelegate {
             fields[elementName] = value
             if ["phone", "fax", "pager", "telex"].contains(where: { elementName.localizedCaseInsensitiveContains($0) }) {
                 phones.append(.init(label: Self.readableLabel(elementName, removing: "OPFContactCopy"), number: value))
+            }
+            if elementName.localizedCaseInsensitiveContains("category") {
+                categories.append(value)
             }
         } else if inContact, elementName == "contactEmailAddress", !value.isEmpty,
                   !emails.contains(where: { $0.address == value }) {
@@ -74,7 +79,10 @@ final class OLMContactParser: NSObject, XMLParserDelegate {
             jobTitle: field("OPFContactCopyBusinessTitle", "OPFContactCopyJobTitle"),
             emails: Self.unique(emails), phoneNumbers: Self.unique(phones),
             notes: field("OPFContactCopyNotesPlain", "OPFContactCopyNotes"),
-            modifiedAt: OLMItemDateParser.parse(field("OPFContactCopyModDate"))
+            modifiedAt: OLMItemDateParser.parse(field("OPFContactCopyModDate")),
+            postalAddresses: ["Home", "Business", "Other"].compactMap(postalAddress),
+            birthday: OLMItemDateParser.parse(field("OPFContactCopyBirthday", "OPFContactCopyBirthDate")),
+            categories: Self.unique(categories.flatMap(Self.splitCategories))
         ))
     }
 
@@ -86,6 +94,7 @@ final class OLMContactParser: NSObject, XMLParserDelegate {
     private func reset(source: ArchiveItemSource) {
         sourceID = source.id; sourcePath = source.entryPath; records = []; ordinal = 0
         inContact = false; elements = []; text = ""; fields = [:]; emails = []; phones = []
+        categories = []
     }
 
     private static func unique<T: Hashable>(_ values: [T]) -> [T] {
@@ -95,6 +104,42 @@ final class OLMContactParser: NSObject, XMLParserDelegate {
     private static func readableLabel(_ value: String, removing prefix: String) -> String {
         value.replacingOccurrences(of: prefix, with: "")
             .replacingOccurrences(of: "([a-z])([A-Z])", with: "$1 $2", options: .regularExpression)
+    }
+
+    private func postalAddress(_ label: String) -> ContactPostalAddress? {
+        let street = field(
+            "OPFContactCopy\(label)AddressStreet",
+            "OPFContactCopy\(label)Street"
+        )
+        let city = field(
+            "OPFContactCopy\(label)AddressCity",
+            "OPFContactCopy\(label)City"
+        )
+        let region = field(
+            "OPFContactCopy\(label)AddressState",
+            "OPFContactCopy\(label)State",
+            "OPFContactCopy\(label)AddressRegion"
+        )
+        let postalCode = field(
+            "OPFContactCopy\(label)AddressPostalCode",
+            "OPFContactCopy\(label)PostalCode",
+            "OPFContactCopy\(label)AddressZip"
+        )
+        let country = field(
+            "OPFContactCopy\(label)AddressCountry",
+            "OPFContactCopy\(label)Country"
+        )
+        guard ![street, city, region, postalCode, country].allSatisfy(\.isEmpty) else { return nil }
+        return ContactPostalAddress(
+            label: label, street: street, city: city, region: region,
+            postalCode: postalCode, country: country
+        )
+    }
+
+    private static func splitCategories(_ value: String) -> [String] {
+        value.split(whereSeparator: { $0 == "," || $0 == ";" })
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
     }
 }
 
@@ -164,8 +209,24 @@ final class OLMCalendarParser: NSObject, XMLParserDelegate {
             endDate: OLMItemDateParser.parse(field("OPFRecurrenceCopyEndDate"))
         ) : nil
         let uuid = field("OPFCalendarEventCopyUUID")
+        let recurrenceID = OLMItemDateParser.parse(field(
+            "OPFCalendarEventCopyRecurrenceID",
+            "OPFCalendarEventCopyOriginalStartTime"
+        ))
+        let status = field("OPFCalendarEventCopyStatus", "OPFCalendarEventGetStatus")
+        let isCancelled = boolean("OPFCalendarEventGetIsCancelled")
+            || boolean("OPFCalendarEventIsCancelled")
+            || status.localizedCaseInsensitiveContains("cancel")
+        let recordID: String
+        if uuid.isEmpty {
+            recordID = "\(sourcePath)#appointment-\(ordinal)"
+        } else if let recurrenceID {
+            recordID = "\(uuid)#exception-\(recurrenceID.timeIntervalSinceReferenceDate)"
+        } else {
+            recordID = uuid
+        }
         records.append(CalendarEventRecord(
-            id: uuid.isEmpty ? "\(sourcePath)#appointment-\(ordinal)" : uuid,
+            id: recordID,
             sourceID: sourceID,
             title: field("OPFCalendarEventCopySummary").nilIfEmpty ?? "Untitled Event",
             startAt: start, endAt: end,
@@ -175,7 +236,16 @@ final class OLMCalendarParser: NSObject, XMLParserDelegate {
             isAllDay: boolean("OPFCalendarEventGetIsAllDayEvent"),
             isPrivate: boolean("OPFCalendarEventGetIsPrivate"),
             hasReminder: boolean("OPFCalendarEventGetHasReminder"),
-            reminderMinutes: Int(field("OPFCalendarEventCopyReminderDelta")), recurrence: recurrence
+            reminderMinutes: Int(field("OPFCalendarEventCopyReminderDelta")), recurrence: recurrence,
+            seriesID: uuid,
+            recurrenceID: recurrenceID,
+            isCancelled: isCancelled,
+            status: status,
+            timeZoneIdentifier: field(
+                "OPFCalendarEventCopyTimeZone",
+                "OPFCalendarEventCopyTimeZoneName",
+                "OPFCalendarEventCopyStartTimeZone"
+            )
         ))
     }
 

@@ -10,13 +10,14 @@ It catalogs ZIP64 OLM files in place, displays nested Outlook folders, pages thr
 - Apple Silicon for the current packaged build
 - Swift Command Line Tools to build from source
 
-The reader has been validated against a 26 GB OLM containing 83,172 messages across 64 folders, 2 contact records across 2 contact collections, and 38,179 events across 8 calendars.
+The reader has been validated against a 26 GB OLM containing 83,172 messages across 64 folders, 2 contact records across 2 contact collections, and 38,179 events across 8 calendars. With the current item-cache schema, the complete uncached contact/calendar validation took 37.03 seconds; the identical second-open validation took 2.84 seconds.
 
 ## Current features
 
 - Native three-column SwiftUI interface with fixed bottom Mail, Calendar, and Contacts navigation (`⌘1`–`⌘3`)
 - Finder-launchable, ad-hoc-signed `OLM Browser.app`
 - `.olm` Finder document registration and Open dialog
+- Recent-archive reopening, whole-window Finder drag-and-drop opening, and persistent macOS file bookmarks with security scope when available
 - Read-only ZIP64 central-directory parsing and random-access entry reads
 - One persistent read-only archive descriptor with thread-safe positional reads
 - Stored and raw-DEFLATE ZIP entry support through a minimal zlib bridge
@@ -64,18 +65,21 @@ The reader has been validated against a 26 GB OLM containing 83,172 messages acr
 - 100-result search paging without a 500-result ceiling
 - Optional folder-scoped search and relevance/newest/oldest sorting
 - Cancelable archive opening and indexing
+- Visible ZIP64-directory, entry-scan, and Outlook-catalog opening phases with entry and bounded-read byte progress
 - Search-index rebuild, cache deletion/compaction, and cache-size reporting
 - Archive entry, attachment payload, duplicate-path, CRC-failure, unsupported-compression, recovered-malformed-message, and unreadable-message diagnostics
 - Explicit JSON diagnostic-report export containing aggregate health metrics only
 - Message export as `.eml` (including available attachments), plain text, JSON, PDF, and CSV
 - Batch export of up to 1,000 currently loaded messages with a 1 GB output limit
 - Background archive opening, paging, search, and indexing
-- Contact-list discovery with lazy parsing, name/company/email/phone search, native-style contact cards, labeled/copyable values, multi-selection, and individual/selected/loaded/all-matching vCard or CSV export
-- Calendar discovery with lazy parsing, a navigable month grid, Today control, selected-day agenda, event detail, attendee/organizer/location/recurrence/reminder previews, multi-selection, and individual/selected/loaded/all-matching iCalendar or CSV export
-- Basic daily, weekly, monthly, and yearly recurrence expansion in the visible calendar month; stored recurrence limits and end dates are honored
-- Contact and calendar collections are parsed only when their section is selected and retained only in memory for the current archive session
+- Contact-list discovery with lazy parsing, name/company/email/phone/address/category search, native-style contact cards, labeled/copyable values, postal addresses, birthdays, category/group labels, multi-selection, and individual/selected/loaded/all-matching vCard or CSV export
+- Calendar discovery with lazy parsing, a large right-pane month grid, upper-middle selected-day agenda, lower-middle event detail, draggable agenda/detail divider, Today control, attendee/organizer/location/recurrence/reminder previews, multi-selection, and individual/selected/loaded/all-matching iCalendar or CSV export
+- Daily, weekly, monthly, and yearly recurrence expansion in the visible calendar month; stored recurrence limits/end dates, moved exceptions, and canceled instances are honored when the corresponding OLM fields are available
+- Archive-fingerprinted binary contact/calendar caches; collections are parsed only when selected and reopen from disposable local cache after their first successful parse
 - Standalone parser, archive-integrity, paging-performance, index-performance, attachment, export, diagnostics, structured-search, and FTS5 smoke checks
 - Synthetic contact/calendar parser and vCard/CSV/iCalendar export checks
+- Synthetic persistent item-cache round-trip, source isolation, invalidation, and deletion checks
+- Synthetic recent-archive security-bookmark store, resolve, and removal checks
 - Synthetic remote-image policy, CSP, local-CID, and per-message approval smoke checks
 
 ## Build and run
@@ -128,6 +132,23 @@ swiftc Sources/OLMBrowser/Models/ArchiveModels.swift \
   -o /tmp/olm-calendar-occurrence-check && /tmp/olm-calendar-occurrence-check
 ```
 
+Run the persistent contact/calendar cache check:
+
+```sh
+swiftc Sources/OLMBrowser/Models/ArchiveModels.swift \
+  Sources/OLMBrowser/Services/OLMItemCache.swift \
+  Checks/ItemCacheSmokeCheck.swift \
+  -o /tmp/olm-item-cache-check && /tmp/olm-item-cache-check
+```
+
+Run the recent-archive bookmark check:
+
+```sh
+swiftc Sources/OLMBrowser/Services/ArchiveAccessManager.swift \
+  Checks/ArchiveAccessSmokeCheck.swift \
+  -o /tmp/olm-archive-access-check && /tmp/olm-archive-access-check
+```
+
 ## Search behavior
 
 Full-text indexing begins after the archive folder catalog opens. Messages remain browsable while indexing runs. The index commits every 250 entries and records its next position in the same transaction, allowing interrupted indexing to resume safely.
@@ -161,7 +182,8 @@ The message Export menu supports EML, plain text, JSON, PDF, and CSV. “Export 
 - Remote image documents cannot read local attachment data: attachment bytes never enter the message HTML, scripts and connections are disabled, and the only newly permitted network requests are image loads to the selected message's HTTPS origin set.
 - Attachment and message exports happen only after an explicit user action.
 - Contact and calendar exports happen only after an explicit user action and write only to the destination chosen by the user.
-- Contact and calendar records are not added to the mail FTS cache; selected collections are decoded locally and retained in process memory only until the archive closes or the app quits.
+- Contact and calendar records are not added to the mail FTS database. They use separate disposable binary files in the macOS user cache, keyed by the standardized archive path, size, modification time, collection kind, and source identifier. They contain normalized private contact/calendar fields, remain local, and are removed by Delete Cache without changing the OLM.
+- Recent-file access is stored as a local macOS bookmark. Open-panel and Finder URLs use security-scoped bookmark data when macOS grants it; the non-sandboxed internal build falls back to a regular persistent bookmark because it does not require a sandbox extension. Security-scoped access, when available, is started only for the chosen archive, retained while it is open, and released on close or termination.
 - Diagnostic reports are exported only after an explicit user action and omit archive paths, filenames, folder names, message content, participant data, attachment names, and attachment payloads.
 - Diagnostic-report schema 2 adds only aggregate CRC-failure, unsupported-compression, recovered-malformed-message, and unreadable-message counts; it does not export entry paths or CRC values.
 - Search indexes remain local in the user's cache directory.
@@ -171,17 +193,16 @@ The message Export menu supports EML, plain text, JSON, PDF, and CSV. “Export 
 
 - Embedded HTML navigation remains intentionally blocked; approved HTTPS links open outside the app.
 - The internal packaged build currently targets Apple Silicon.
-- A complete selected calendar is loaded before its month grid is presented so day counts and agenda results are not based on a partial page. Large collections therefore require a one-time in-memory parse when first selected; the complete 8-calendar/38,179-event validation took about 36 seconds and peaked near 533 MB on the development machine. An individual selected calendar normally requires only its share of that work. Persistent calendar indexing and detailed parse progress remain future work.
-- iCalendar export preserves the normalized fields currently recognized by the parser. Complex Outlook recurrence exceptions and time-zone blobs require broader cross-version validation.
+- A complete selected calendar is loaded before its month grid is presented so day counts and agenda results are not based on a partial page. A collection still requires one full bounded XML parse the first time its current archive fingerprint is encountered; subsequent launches load the normalized binary cache. The current complete 8-calendar/38,179-event validation measured 37.03 seconds and about 603 MB peak footprint uncached, then 2.84 seconds and about 279 MB on the cached second open.
+- Moved and canceled recurrence exceptions are modeled and exported when Outlook supplies a series ID and recurrence ID. More complex deleted-instance tables, cross-version recurrence blobs, and proprietary time-zone definitions still require broader validation.
 - The managed Command Line Tools installation does not include XCTest, so checks are standalone executables.
 
 ## Planned features
 
-1. Add detailed phase/byte progress during initial archive opening.
-2. Add recent archives, drag-and-drop opening, and persistent security-scoped access.
-3. Add persistent calendar/contact indexing, multi-selection, date-range filters, recurrence-exception fidelity, and detailed collection parse progress.
-4. Reconstruct conversations.
-5. Expand accessibility, keyboard navigation, localization, and cross-version OLM testing.
+1. Add calendar date-range filters, day/week/list views, detailed first-parse collection progress, and broader recurrence/time-zone fixture coverage.
+2. Recover more contact properties, contact groups, photos, and duplicate-linkage metadata across OLM versions.
+3. Reconstruct mail conversations.
+4. Expand accessibility, keyboard navigation, localization, and cross-version OLM testing.
 
 ## Project layout
 

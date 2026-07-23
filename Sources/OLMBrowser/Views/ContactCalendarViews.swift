@@ -95,6 +95,35 @@ struct ContactDetailView: View {
                             }
                         }
                     }
+                    if !contact.postalAddresses.isEmpty {
+                        ContactInformationCard(title: "Address", systemImage: "house.fill") {
+                            ForEach(contact.postalAddresses) { address in
+                                ContactValueRow(
+                                    label: address.label,
+                                    value: address.formatted,
+                                    systemImage: "mappin.and.ellipse"
+                                )
+                            }
+                        }
+                    }
+                    if contact.birthday != nil || !contact.categories.isEmpty {
+                        ContactInformationCard(title: "Additional", systemImage: "person.text.rectangle") {
+                            if let birthday = contact.birthday {
+                                ContactValueRow(
+                                    label: "Birthday",
+                                    value: birthday.formatted(date: .long, time: .omitted),
+                                    systemImage: "gift"
+                                )
+                            }
+                            if !contact.categories.isEmpty {
+                                ContactValueRow(
+                                    label: "Groups",
+                                    value: contact.categories.joined(separator: ", "),
+                                    systemImage: "tag"
+                                )
+                            }
+                        }
+                    }
                     if !contact.notes.isEmpty {
                         ContactInformationCard(title: "Notes", systemImage: "note.text") {
                             Text(contact.notes)
@@ -179,6 +208,7 @@ private struct ContactValueRow: View {
                 .font(.caption.weight(.medium)).foregroundStyle(.secondary)
                 .frame(width: 76, alignment: .leading)
             Text(value).textSelection(.enabled)
+                .accessibilityLabel(label.isEmpty ? value : "\(label), \(value)")
             Spacer(minLength: 8)
             Button {
                 NSPasteboard.general.clearContents()
@@ -191,8 +221,15 @@ private struct ContactValueRow: View {
     }
 }
 
-struct CalendarEventListView: View {
-    var body: some View { CalendarMonthView() }
+struct CalendarWorkspaceMiddleView: View {
+    var body: some View {
+        VSplitView {
+            CalendarDayAgendaView()
+                .frame(minHeight: 180, idealHeight: 310)
+            CalendarEventDetailView()
+                .frame(minHeight: 220)
+        }
+    }
 }
 
 struct CalendarEventDetailView: View {
@@ -223,7 +260,13 @@ struct CalendarEventDetailView: View {
                             Button("CSV") { store.exportCalendarEvents([event], format: .csv) }
                         }
                     }
+                    if event.isCancelled { Label("Canceled", systemImage: "xmark.circle.fill").foregroundStyle(.red) }
                     if event.isPrivate { Label("Marked private", systemImage: "lock").foregroundStyle(.secondary) }
+                    if !event.status.isEmpty && !event.isCancelled { labeled("Status", event.status) }
+                    if !event.timeZoneIdentifier.isEmpty { labeled("Time Zone", event.timeZoneIdentifier) }
+                    if let recurrenceID = event.recurrenceID {
+                        labeled("Recurrence Exception", recurrenceID.formatted(date: .long, time: .shortened))
+                    }
                     if !event.organizer.isEmpty { labeled("Organizer", event.organizer) }
                     if !event.attendees.isEmpty { labeled("Attendees", event.attendees.map { $0.name.isEmpty ? $0.address : $0.name }.joined(separator: "\n")) }
                     if let recurrence = event.recurrence { labeled("Recurrence", [recurrence.frequency, "every \(recurrence.interval)"].filter { !$0.isEmpty }.joined(separator: " · ")) }

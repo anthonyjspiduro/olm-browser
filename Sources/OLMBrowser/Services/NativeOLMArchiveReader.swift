@@ -13,6 +13,7 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
     private var allEntriesByPath: [String: [ZIPEntry]] = [:]
     private var folderByEntryPath: [String: MailFolder.ID] = [:]
     private var searchIndex: OLMSearchIndex?
+    private var itemCache: OLMItemCache?
     private var failedMessageEntryPaths: Set<String> = []
     private var recoveredMessageEntryPaths: Set<String> = []
     private var checksumFailureEntryPaths: Set<String> = []
@@ -20,6 +21,13 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
     private var eventsBySource: [ArchiveItemSource.ID: [CalendarEventRecord]] = [:]
 
     func openArchive(at url: URL) throws -> ArchiveSnapshot {
+        try openArchive(at: url, progress: { _ in })
+    }
+
+    func openArchive(
+        at url: URL,
+        progress: @escaping @Sendable (ArchiveOpenProgress) -> Void
+    ) throws -> ArchiveSnapshot {
         let resourceValues = try url.resourceValues(forKeys: [
             .fileSizeKey, .isReadableKey, .contentModificationDateKey
         ])
@@ -27,8 +35,24 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
             throw ArchiveReaderError.unreadableArchive
         }
 
-        let openedArchive = try ZIPArchive(url: url)
-        let openedCatalog = buildCatalog(entries: openedArchive.entries)
+        let totalFileBytes = UInt64(max(0, resourceValues.fileSize ?? 0))
+        progress(.init(
+            phase: "Reading ZIP64 directory", completedUnits: 0, totalUnits: 0,
+            bytesRead: 0, totalBytes: totalFileBytes
+        ))
+        let openedArchive = try ZIPArchive(url: url) { entriesRead, totalEntries, bytesRead, totalBytes in
+            progress(.init(
+                phase: entriesRead == 0 ? "Reading ZIP64 directory" : "Scanning archive entries",
+                completedUnits: entriesRead, totalUnits: totalEntries,
+                bytesRead: bytesRead, totalBytes: totalBytes
+            ))
+        }
+        let openedCatalog = buildCatalog(
+            entries: openedArchive.entries,
+            progress: progress,
+            bytesRead: openedArchive.centralDirectoryReadByteCount,
+            totalFileBytes: totalFileBytes
+        )
         guard !openedCatalog.messageEntriesByFolder.isEmpty
                 || !openedCatalog.contactSources.isEmpty
                 || !openedCatalog.calendarSources.isEmpty else {
@@ -41,6 +65,11 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
         let folders = makeFolders(from: openedCatalog)
         let size = Int64(resourceValues.fileSize ?? 0)
         let openedIndex = try OLMSearchIndex(
+            archiveURL: url,
+            fileSize: size,
+            modifiedAt: resourceValues.contentModificationDate
+        )
+        let openedItemCache = try OLMItemCache(
             archiveURL: url,
             fileSize: size,
             modifiedAt: resourceValues.contentModificationDate
@@ -63,6 +92,7 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
             allEntriesByPath = completePathLookup
             folderByEntryPath = folderLookup
             searchIndex = openedIndex
+            itemCache = openedItemCache
             failedMessageEntryPaths = []
             recoveredMessageEntryPaths = []
             checksumFailureEntryPaths = []
@@ -297,7 +327,7 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
                 unsupportedCompressionEntries: entries.count {
                     $0.compressionMethod != 0 && $0.compressionMethod != 8
                 },
-                cacheByteCount: searchIndex?.cacheByteCount ?? 0
+                cacheByteCount: (searchIndex?.cacheByteCount ?? 0) + (itemCache?.byteCount ?? 0)
             )
         }
     }
@@ -312,8 +342,10 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
     }
 
     func deleteSearchCache() throws {
-        guard let index = stateLock.withLock({ searchIndex }) else { throw ArchiveReaderError.unreadableArchive }
+        let caches = stateLock.withLock { (searchIndex, itemCache) }
+        guard let index = caches.0 else { throw ArchiveReaderError.unreadableArchive }
         try index.reset(compact: true)
+        try caches.1?.removeAll()
     }
 
     private func parse(
@@ -350,11 +382,18 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
         itemParseLock.lock()
         defer { itemParseLock.unlock() }
         if let cached = stateLock.withLock({ contactsBySource[source.id] }) { return cached }
+        if let cached = stateLock.withLock({ itemCache?.contacts(for: source.id) }) {
+            stateLock.withLock { contactsBySource[source.id] = cached }
+            return cached
+        }
         let state = stateLock.withLock { (archive, allEntriesByPath[source.entryPath]?.first) }
         guard let archive = state.0, let entry = state.1 else { throw ArchiveReaderError.unreadableArchive }
         let data = try archive.data(for: entry, maximumSize: Self.maximumItemCollectionSize)
         let parsed = OLMContactParser().parse(data: data, source: source)
-        stateLock.withLock { contactsBySource[source.id] = parsed }
+        stateLock.withLock {
+            contactsBySource[source.id] = parsed
+            itemCache?.storeContacts(parsed, sourceID: source.id)
+        }
         return parsed
     }
 
@@ -362,11 +401,18 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
         itemParseLock.lock()
         defer { itemParseLock.unlock() }
         if let cached = stateLock.withLock({ eventsBySource[source.id] }) { return cached }
+        if let cached = stateLock.withLock({ itemCache?.calendarEvents(for: source.id) }) {
+            stateLock.withLock { eventsBySource[source.id] = cached }
+            return cached
+        }
         let state = stateLock.withLock { (archive, allEntriesByPath[source.entryPath]?.first) }
         guard let archive = state.0, let entry = state.1 else { throw ArchiveReaderError.unreadableArchive }
         let data = try archive.data(for: entry, maximumSize: Self.maximumItemCollectionSize)
         let parsed = OLMCalendarParser().parse(data: data, source: source)
-        stateLock.withLock { eventsBySource[source.id] = parsed }
+        stateLock.withLock {
+            eventsBySource[source.id] = parsed
+            itemCache?.storeCalendarEvents(parsed, sourceID: source.id)
+        }
         return parsed
     }
 
@@ -514,10 +560,22 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
     static let indexDecodeChunkSize = 32
     static let unindexedInteractivePageSize = 25
 
-    private func buildCatalog(entries: [ZIPEntry]) -> Catalog {
+    private func buildCatalog(
+        entries: [ZIPEntry],
+        progress: @escaping @Sendable (ArchiveOpenProgress) -> Void = { _ in },
+        bytesRead: UInt64 = 0,
+        totalFileBytes: UInt64 = 0
+    ) -> Catalog {
         var catalog = Catalog()
         let marker = "/com.microsoft.__Messages/"
-        for entry in entries where entry.path.hasSuffix(".xml") {
+        for (index, entry) in entries.enumerated() where entry.path.hasSuffix(".xml") {
+            if index.isMultiple(of: 5_000) {
+                progress(.init(
+                    phase: "Cataloging Outlook data",
+                    completedUnits: index, totalUnits: entries.count,
+                    bytesRead: bytesRead, totalBytes: totalFileBytes
+                ))
+            }
             if entry.path.hasSuffix("/Contacts.xml") || entry.path == "Local/Address Book/Contacts.xml" {
                 let source = Self.itemSource(for: entry, kind: .contacts)
                 catalog.contactSources.append(source)
@@ -553,6 +611,11 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
         }
         catalog.contactSources.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         catalog.calendarSources.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        progress(.init(
+            phase: "Cataloging Outlook data",
+            completedUnits: entries.count, totalUnits: entries.count,
+            bytesRead: bytesRead, totalBytes: totalFileBytes
+        ))
         return catalog
     }
 

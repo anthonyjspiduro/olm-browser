@@ -47,14 +47,23 @@ struct ZIPEntry: Sendable, Hashable {
 final class ZIPArchive: @unchecked Sendable {
     let url: URL
     let entries: [ZIPEntry]
+    let centralDirectoryReadByteCount: UInt64
     private let descriptor: Int32
 
-    init(url: URL) throws {
-        let openedEntries = try Self.readCentralDirectory(at: url)
+    convenience init(url: URL) throws {
+        try self.init(url: url, progress: { _, _, _, _ in })
+    }
+
+    init(
+        url: URL,
+        progress: @escaping @Sendable (Int, Int, UInt64, UInt64) -> Void
+    ) throws {
+        let openedDirectory = try Self.readCentralDirectory(at: url, progress: progress)
         let openedDescriptor = Darwin.open(url.path, O_RDONLY)
         guard openedDescriptor >= 0 else { throw ZIPArchiveError.readFailed(errno) }
         self.url = url
-        self.entries = openedEntries
+        self.entries = openedDirectory.entries
+        self.centralDirectoryReadByteCount = openedDirectory.bytesRead
         self.descriptor = openedDescriptor
     }
 
@@ -161,7 +170,10 @@ final class ZIPArchive: @unchecked Sendable {
         return output
     }
 
-    private static func readCentralDirectory(at url: URL) throws -> [ZIPEntry] {
+    private static func readCentralDirectory(
+        at url: URL,
+        progress: @escaping @Sendable (Int, Int, UInt64, UInt64) -> Void
+    ) throws -> (entries: [ZIPEntry], bytesRead: UInt64) {
         let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
 
@@ -169,6 +181,7 @@ final class ZIPArchive: @unchecked Sendable {
         let tailSize = min(fileSize, 65_557)
         try handle.seek(toOffset: fileSize - tailSize)
         let tail = try handle.readToEnd() ?? Data()
+        progress(0, 0, UInt64(tail.count), fileSize)
         guard let relativeEOCD = tail.lastOffset(of: 0x06054b50) else {
             throw ZIPArchiveError.invalidArchive("end-of-central-directory record not found")
         }
@@ -214,6 +227,8 @@ final class ZIPArchive: @unchecked Sendable {
 
         var result: [ZIPEntry] = []
         result.reserveCapacity(Int(min(entryCount, UInt64(Int.max))))
+        let totalEntryCount = Int(min(entryCount, UInt64(Int.max)))
+        progress(0, totalEntryCount, UInt64(tail.count) + UInt64(directory.count), fileSize)
         var cursor = 0
         while cursor + 46 <= directory.count && UInt64(result.count) < entryCount {
             if result.count.isMultiple(of: 1_000), Task.isCancelled { throw ZIPArchiveError.cancelled }
@@ -278,12 +293,22 @@ final class ZIPArchive: @unchecked Sendable {
                 localHeaderOffset: localOffset
             ))
             cursor += recordLength
+            if result.count.isMultiple(of: 2_000) {
+                progress(
+                    result.count, totalEntryCount,
+                    UInt64(tail.count) + UInt64(directory.count), fileSize
+                )
+            }
         }
 
         guard UInt64(result.count) == entryCount else {
             throw ZIPArchiveError.invalidArchive("expected \(entryCount) entries, found \(result.count)")
         }
-        return result
+        progress(
+            result.count, totalEntryCount,
+            UInt64(tail.count) + UInt64(directory.count), fileSize
+        )
+        return (result, UInt64(tail.count) + UInt64(directory.count))
     }
 }
 

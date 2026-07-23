@@ -8,6 +8,10 @@ struct CalendarWorkspaceRightView: View {
             switch store.calendarWorkspaceViewMode {
             case .month:
                 CalendarMonthView()
+            case .week:
+                CalendarTimelineView(mode: .week)
+            case .day:
+                CalendarTimelineView(mode: .day)
             case .list:
                 CalendarChronologicalListView()
             }
@@ -25,8 +29,8 @@ struct CalendarWorkspaceRightView: View {
                     }
                 }
                 .pickerStyle(.segmented)
-                .frame(width: 150)
-                .help("Switch between month and chronological list views")
+                .frame(width: 260)
+                .help("Switch between month, week, day, and chronological list views")
             }
         }
     }
@@ -196,6 +200,12 @@ struct CalendarMonthView: View {
                 Divider()
                 Button("All Matching Events as iCalendar") { store.exportAllMatchingCalendarEvents(format: .ics) }
                 Button("All Matching Events as CSV") { store.exportAllMatchingCalendarEvents(format: .csv) }
+                Divider()
+                Button(store.showsAllCalendarSources
+                       ? "Export All Calendars as iCalendar"
+                       : "Export Entire Calendar as iCalendar") {
+                    store.exportEntireCalendarAsICS()
+                }
             } label: { Label("Export Events", systemImage: "square.and.arrow.up") }
             .disabled(store.calendarEvents.isEmpty || store.isExportingItems)
         }

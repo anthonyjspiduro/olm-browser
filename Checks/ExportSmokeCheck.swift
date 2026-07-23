@@ -76,6 +76,9 @@ private struct SyntheticReader: OLMArchiveReading {
     func loadCalendarEvents(sourceID: ArchiveItemSource.ID?, matching query: String, offset: Int, limit: Int) throws -> CalendarEventPage {
         CalendarEventPage(records: [], nextOffset: 0, totalCount: 0)
     }
+    func loadNotes(sourceID: ArchiveItemSource.ID?, matching query: String, offset: Int, limit: Int) throws -> NotePage {
+        NotePage(records: [], nextOffset: 0, totalCount: 0)
+    }
     func attachmentData(for attachment: AttachmentSummary) throws -> Data { Data("hello".utf8) }
     func operationalStatus() -> ArchiveOperationalStatus { ArchiveOperationalStatus(archiveEntries: 0, messageEntries: 0, attachmentEntries: 0, duplicateEntryPaths: 0, failedMessageEntries: 0, recoveredMalformedMessageEntries: 0, checksumFailureEntries: 0, unsupportedCompressionEntries: 0, cacheByteCount: 0) }
     func folderUnreadCounts() -> [String: Int]? { [:] }

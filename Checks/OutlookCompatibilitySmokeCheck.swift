@@ -39,7 +39,8 @@ enum OutlookCompatibilitySmokeCheck {
             <OPFCalendarEventIsRecurring>1</OPFCalendarEventIsRecurring>
             <OPFRecurrencePatternType>recursWeekly</OPFRecurrencePatternType>
             <OPFRecurrencePatternInterval>1</OPFRecurrencePatternInterval>
-            <OPFRecurrenceGetOccurenceCount>3</OPFRecurrenceGetOccurenceCount>
+            <OPFRecurrenceIsNumbered>1</OPFRecurrenceIsNumbered>
+            <OPFRecurrenceGetOccurenceCount>3E0</OPFRecurrenceGetOccurenceCount>
           </appointment>
           <appointment>
             <OPFCalendarEventCopyUUID>all-day@example.invalid</OPFCalendarEventCopyUUID>
@@ -48,10 +49,33 @@ enum OutlookCompatibilitySmokeCheck {
             <OPFCalendarEventCopyEndTime>2026-07-23</OPFCalendarEventCopyEndTime>
             <OPFCalendarEventGetIsAllDayEvent>1</OPFCalendarEventGetIsAllDayEvent>
           </appointment>
+          <appointment>
+            <OPFCalendarEventCopyUUID>relative-monthly@example.invalid</OPFCalendarEventCopyUUID>
+            <OPFCalendarEventCopySummary>Relative Monthly Fixture</OPFCalendarEventCopySummary>
+            <OPFCalendarEventCopyStartTime>2026-01-20T09:00:00</OPFCalendarEventCopyStartTime>
+            <OPFCalendarEventCopyEndTime>2026-01-20T10:00:00</OPFCalendarEventCopyEndTime>
+            <OPFCalendarEventIsRecurring>1</OPFCalendarEventIsRecurring>
+            <OPFRecurrencePatternType>OPFRecurrencePatternRelativeMonthly</OPFRecurrencePatternType>
+            <OPFRecurrencePatternInterval>1</OPFRecurrencePatternInterval>
+            <OPFRecurrencePatternWeek>3</OPFRecurrencePatternWeek>
+            <OPFRecurrencePatternDaysOfWeek><tuesday>1</tuesday></OPFRecurrencePatternDaysOfWeek>
+          </appointment>
+          <appointment>
+            <OPFCalendarEventCopyUUID>relative-yearly@example.invalid</OPFCalendarEventCopyUUID>
+            <OPFCalendarEventCopySummary>Relative Yearly Fixture</OPFCalendarEventCopySummary>
+            <OPFCalendarEventCopyStartTime>2026-11-27T09:00:00</OPFCalendarEventCopyStartTime>
+            <OPFCalendarEventCopyEndTime>2026-11-27T10:00:00</OPFCalendarEventCopyEndTime>
+            <OPFCalendarEventIsRecurring>1</OPFCalendarEventIsRecurring>
+            <OPFRecurrencePatternType>OPFRecurrencePatternRelativeYearly</OPFRecurrencePatternType>
+            <OPFRecurrencePatternInterval>1</OPFRecurrencePatternInterval>
+            <OPFRecurrencePatternMonth>11</OPFRecurrencePatternMonth>
+            <OPFRecurrencePatternWeek>5</OPFRecurrencePatternWeek>
+            <OPFRecurrencePatternDaysOfWeek><friday>1</friday></OPFRecurrencePatternDaysOfWeek>
+          </appointment>
         </appointments>
         """
         let events = OLMCalendarParser().parse(data: Data(xml.utf8), source: source)
-        require(events.count == 2, "cross-version event fixture count")
+        require(events.count == 4, "cross-version event fixture count")
         require(events[0].timeZoneIdentifier == "America/New_York", "normalized event timezone")
         require(
             CalendarOccurrenceEngine.supportsRecurrenceFrequency("recursWeekly"),
@@ -61,14 +85,22 @@ enum OutlookCompatibilitySmokeCheck {
             CalendarOccurrenceEngine.supportsRecurrenceFrequency("OPFRecurrencePatternDaily")
                 && CalendarOccurrenceEngine.supportsRecurrenceFrequency("OPFRecurrencePatternWeekly")
                 && CalendarOccurrenceEngine.supportsRecurrenceFrequency("OPFRecurrencePatternAbsoluteMonthly")
-                && CalendarOccurrenceEngine.supportsRecurrenceFrequency("OPFRecurrencePatternAbsoluteYearly"),
+                && CalendarOccurrenceEngine.supportsRecurrenceFrequency("OPFRecurrencePatternAbsoluteYearly")
+                && CalendarOccurrenceEngine.supportsRecurrenceFrequency("OPFRecurrencePatternRelativeMonthly")
+                && CalendarOccurrenceEngine.supportsRecurrenceFrequency("OPFRecurrencePatternRelativeYearly"),
             "OPF recurrence labels used by production Outlook archives"
         )
         require(
-            !CalendarOccurrenceEngine.supportsRecurrenceFrequency("relativeMonthly")
-                && !CalendarOccurrenceEngine.supportsRecurrenceFrequency("OPFRecurrencePatternRelativeMonthly")
-                && !CalendarOccurrenceEngine.supportsRecurrenceFrequency("OPFRecurrencePatternRelativeYearly"),
-            "unsupported relative recurrence is reported instead of guessed"
+            events[0].recurrence?.occurrenceCount == 3,
+            "scientific numbered occurrence count"
+        )
+        require(
+            events[2].recurrence?.weekOfMonth == 3
+                && events[2].recurrence?.daysOfWeek == [3]
+                && events[3].recurrence?.weekOfMonth == 5
+                && events[3].recurrence?.monthOfYear == 11
+                && events[3].recurrence?.daysOfWeek == [6],
+            "relative recurrence fields"
         )
         let boundStart = events[0].startAt
         let invalidBoundEvent = CalendarEventRecord(
@@ -114,14 +146,51 @@ enum OutlookCompatibilitySmokeCheck {
             events[1].endAt.timeIntervalSince(events[1].startAt) == 86_400,
             "same-date all-day event receives exclusive next-day end"
         )
+        let february = DateInterval(
+            start: eastern.date(from: DateComponents(year: 2026, month: 2, day: 1))!,
+            end: eastern.date(from: DateComponents(year: 2026, month: 3, day: 1))!
+        )
+        let relativeMonthly = CalendarOccurrenceEngine.occurrences(
+            for: events[2], intersecting: february, calendar: eastern
+        )
+        require(
+            relativeMonthly.count == 1
+                && eastern.component(.day, from: relativeMonthly[0].startAt) == 17
+                && eastern.component(.weekday, from: relativeMonthly[0].startAt) == 3,
+            "third Tuesday relative-monthly expansion"
+        )
+        let november2027 = DateInterval(
+            start: eastern.date(from: DateComponents(year: 2027, month: 11, day: 1))!,
+            end: eastern.date(from: DateComponents(year: 2027, month: 12, day: 1))!
+        )
+        let relativeYearly = CalendarOccurrenceEngine.occurrences(
+            for: events[3], intersecting: november2027, calendar: eastern
+        )
+        require(
+            relativeYearly.count == 1
+                && eastern.component(.day, from: relativeYearly[0].startAt) == 26
+                && eastern.component(.weekday, from: relativeYearly[0].startAt) == 6,
+            "last Friday relative-yearly expansion"
+        )
 
         let exported = String(
             decoding: ContactCalendarExporter.calendarData([events[0]], format: .ics),
             as: UTF8.self
         )
         require(
-            exported.contains("RRULE:FREQ=WEEKLY;INTERVAL=1;COUNT=3"),
+            exported.contains("RRULE:FREQ=WEEKLY;INTERVAL=1;BYDAY=SU;COUNT=3"),
             "cross-version recurrence export"
+        )
+        let relativeExport = String(
+            decoding: ContactCalendarExporter.calendarData(
+                [events[2], events[3]], format: .ics
+            ),
+            as: UTF8.self
+        )
+        require(
+            relativeExport.contains("RRULE:FREQ=MONTHLY;INTERVAL=1;BYDAY=3TU")
+                && relativeExport.contains("RRULE:FREQ=YEARLY;INTERVAL=1;BYMONTH=11;BYDAY=-1FR"),
+            "relative recurrence iCalendar export"
         )
         let materialized = occurrences[1].materializedEvent
         require(materialized.recurrence == nil && materialized.startAt == occurrences[1].startAt,

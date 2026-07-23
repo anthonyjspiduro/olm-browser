@@ -42,7 +42,7 @@ struct CalendarOccurrence: Identifiable, Hashable, Sendable {
 
 enum CalendarOccurrenceEngine {
     static func supportsRecurrenceFrequency(_ value: String) -> Bool {
-        recurrenceComponent(value) != nil
+        recurrenceKind(value) != nil
     }
 
     static func occurrences(
@@ -83,7 +83,7 @@ enum CalendarOccurrenceEngine {
             return event.isCancelled ? [] : standaloneOccurrence(for: event, intersecting: range)
         }
         guard let recurrence = event.recurrence,
-              let component = recurrenceComponent(recurrence.frequency) else {
+              let kind = recurrenceKind(recurrence.frequency) else {
             let occurrence = CalendarOccurrence(event: event, startAt: event.startAt, endAt: event.endAt)
             return occurrence.intersects(range) ? [occurrence] : []
         }
@@ -96,38 +96,38 @@ enum CalendarOccurrenceEngine {
         if let timeZone = TimeZone(identifier: event.timeZoneIdentifier) {
             recurrenceCalendar.timeZone = timeZone
         }
-        var occurrenceIndex = 0
-        var start = event.startAt
-
-        if start < range.start {
-            let estimated = estimatedSkip(
-                from: start, to: range.start, component: component,
-                interval: interval, calendar: recurrenceCalendar
-            )
-            if estimated > 0, estimated < countLimit,
-               let advanced = recurrenceCalendar.date(byAdding: component, value: estimated * interval, to: start) {
-                occurrenceIndex = estimated
-                start = advanced
-            }
-            while start.addingTimeInterval(duration) < range.start,
-                  occurrenceIndex < countLimit,
-                  let next = recurrenceCalendar.date(byAdding: component, value: interval, to: start) {
-                occurrenceIndex += 1
-                start = next
-            }
-        }
-
         var result: [CalendarOccurrence] = []
+        var occurrenceIndex = 0
+        var periodIndex = countLimit == Int.max
+            ? estimatedPeriodSkip(
+                from: event.startAt,
+                to: range.start.addingTimeInterval(-duration),
+                kind: kind,
+                interval: interval,
+                calendar: recurrenceCalendar
+            )
+            : 0
         var safetyLimit = 0
-        while occurrenceIndex < countLimit, start < range.end, safetyLimit < 10_000 {
-            if let recurrenceEnd, start > recurrenceEnd { break }
-            let end = start.addingTimeInterval(duration)
-            let occurrence = CalendarOccurrence(event: event, startAt: start, endAt: end)
-            if occurrence.intersects(range) { result.append(occurrence) }
-            guard let next = recurrenceCalendar.date(byAdding: component, value: interval, to: start), next > start else { break }
-            occurrenceIndex += 1
+        while occurrenceIndex < countLimit, safetyLimit < 100_000 {
+            guard let period = period(
+                index: periodIndex,
+                event: event,
+                recurrence: recurrence,
+                kind: kind,
+                interval: interval,
+                calendar: recurrenceCalendar
+            ) else { break }
+            if period.anchor >= range.end, period.starts.allSatisfy({ $0 >= range.end }) { break }
+            for start in period.starts.sorted() where start >= event.startAt {
+                if let recurrenceEnd, start > recurrenceEnd { return result }
+                if occurrenceIndex >= countLimit { return result }
+                let end = start.addingTimeInterval(duration)
+                let occurrence = CalendarOccurrence(event: event, startAt: start, endAt: end)
+                if occurrence.intersects(range) { result.append(occurrence) }
+                occurrenceIndex += 1
+            }
+            periodIndex += 1
             safetyLimit += 1
-            start = next
         }
         return result
     }
@@ -140,38 +140,219 @@ enum CalendarOccurrenceEngine {
         return occurrence.intersects(range) ? [occurrence] : []
     }
 
-    private static func recurrenceComponent(_ value: String) -> Calendar.Component? {
+    private enum RecurrenceKind: Equatable {
+        case daily
+        case weekly
+        case absoluteMonthly
+        case relativeMonthly
+        case absoluteYearly
+        case relativeYearly
+    }
+
+    private struct RecurrencePeriod {
+        let anchor: Date
+        let starts: [Date]
+    }
+
+    private static func recurrenceKind(_ value: String) -> RecurrenceKind? {
         switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-        case "0", "daily", "day", "recursdaily", "opfrecurrencepatterndaily": .day
-        case "1", "weekly", "week", "recursweekly", "opfrecurrencepatternweekly": .weekOfYear
-        case "2", "3", "monthly", "month", "recursmonthly", "absolutemonthly",
-             "opfrecurrencepatternabsolutemonthly": .month
+        case "0", "daily", "day", "recursdaily", "opfrecurrencepatterndaily":
+            .daily
+        case "1", "weekly", "week", "recursweekly", "opfrecurrencepatternweekly":
+            .weekly
+        case "2", "monthly", "month", "recursmonthly", "absolutemonthly",
+             "opfrecurrencepatternabsolutemonthly":
+            .absoluteMonthly
+        case "3", "relativemonthly", "recursmonthnth",
+             "opfrecurrencepatternrelativemonthly":
+            .relativeMonthly
         case "4", "5", "yearly", "annual", "year", "recursyearly", "absoluteyearly",
-             "opfrecurrencepatternabsoluteyearly": .year
+             "opfrecurrencepatternabsoluteyearly":
+            .absoluteYearly
+        case "6", "relativeyearly", "recursyearnth",
+             "opfrecurrencepatternrelativeyearly":
+            .relativeYearly
         default: nil
         }
     }
 
-    private static func estimatedSkip(
+    private static func period(
+        index: Int,
+        event: CalendarEventRecord,
+        recurrence: CalendarRecurrence,
+        kind: RecurrenceKind,
+        interval: Int,
+        calendar: Calendar
+    ) -> RecurrencePeriod? {
+        switch kind {
+        case .daily:
+            guard let start = calendar.date(
+                byAdding: .day, value: index * interval, to: event.startAt
+            ) else { return nil }
+            return RecurrencePeriod(anchor: start, starts: [start])
+        case .weekly:
+            let weekStart = startOfWeek(containing: event.startAt, calendar: calendar)
+            guard let anchor = calendar.date(
+                byAdding: .weekOfYear, value: index * interval, to: weekStart
+            ) else { return nil }
+            let weekdays = recurrence.daysOfWeek.isEmpty
+                ? [calendar.component(.weekday, from: event.startAt)]
+                : recurrence.daysOfWeek
+            let starts = weekdays.compactMap { weekday -> Date? in
+                let offset = (weekday - calendar.firstWeekday + 7) % 7
+                guard let day = calendar.date(byAdding: .day, value: offset, to: anchor) else {
+                    return nil
+                }
+                return applyingTime(of: event.startAt, to: day, calendar: calendar)
+            }
+            return RecurrencePeriod(anchor: anchor, starts: starts)
+        case .absoluteMonthly, .relativeMonthly:
+            guard let firstMonth = calendar.dateInterval(of: .month, for: event.startAt)?.start,
+                  let anchor = calendar.date(
+                    byAdding: .month, value: index * interval, to: firstMonth
+                  ) else { return nil }
+            let start: Date?
+            if kind == .absoluteMonthly {
+                start = date(
+                    inMonthContaining: anchor,
+                    day: recurrence.dayOfMonth
+                        ?? calendar.component(.day, from: event.startAt),
+                    timeFrom: event.startAt,
+                    calendar: calendar
+                )
+            } else {
+                start = relativeDate(
+                    inMonthContaining: anchor,
+                    weekdays: recurrence.daysOfWeek,
+                    week: recurrence.weekOfMonth,
+                    fallback: event.startAt,
+                    calendar: calendar
+                )
+            }
+            return RecurrencePeriod(anchor: anchor, starts: start.map { [$0] } ?? [])
+        case .absoluteYearly, .relativeYearly:
+            guard let firstYear = calendar.dateInterval(of: .year, for: event.startAt)?.start,
+                  let yearAnchor = calendar.date(
+                    byAdding: .year, value: index * interval, to: firstYear
+                  ) else { return nil }
+            let month = min(12, max(1, recurrence.monthOfYear
+                ?? calendar.component(.month, from: event.startAt)))
+            guard let anchor = calendar.date(
+                byAdding: .month, value: month - 1, to: yearAnchor
+            ) else { return nil }
+            let start: Date?
+            if kind == .absoluteYearly {
+                start = date(
+                    inMonthContaining: anchor,
+                    day: recurrence.dayOfMonth
+                        ?? calendar.component(.day, from: event.startAt),
+                    timeFrom: event.startAt,
+                    calendar: calendar
+                )
+            } else {
+                start = relativeDate(
+                    inMonthContaining: anchor,
+                    weekdays: recurrence.daysOfWeek,
+                    week: recurrence.weekOfMonth,
+                    fallback: event.startAt,
+                    calendar: calendar
+                )
+            }
+            return RecurrencePeriod(anchor: anchor, starts: start.map { [$0] } ?? [])
+        }
+    }
+
+    private static func estimatedPeriodSkip(
         from start: Date,
         to target: Date,
-        component: Calendar.Component,
+        kind: RecurrenceKind,
         interval: Int,
         calendar: Calendar
     ) -> Int {
         let difference: Int
-        switch component {
-        case .day:
+        switch kind {
+        case .daily:
             difference = calendar.dateComponents([.day], from: start, to: target).day ?? 0
-        case .weekOfYear:
+        case .weekly:
             difference = calendar.dateComponents([.day], from: start, to: target).day.map { $0 / 7 } ?? 0
-        case .month:
+        case .absoluteMonthly, .relativeMonthly:
             difference = calendar.dateComponents([.month], from: start, to: target).month ?? 0
-        case .year:
+        case .absoluteYearly, .relativeYearly:
             difference = calendar.dateComponents([.year], from: start, to: target).year ?? 0
-        default:
-            difference = 0
         }
         return max(0, difference / interval - 1)
+    }
+
+    private static func startOfWeek(containing date: Date, calendar: Calendar) -> Date {
+        let day = calendar.startOfDay(for: date)
+        let weekday = calendar.component(.weekday, from: day)
+        let offset = (weekday - calendar.firstWeekday + 7) % 7
+        return calendar.date(byAdding: .day, value: -offset, to: day) ?? day
+    }
+
+    private static func applyingTime(
+        of source: Date,
+        to day: Date,
+        calendar: Calendar
+    ) -> Date? {
+        var components = calendar.dateComponents([.year, .month, .day], from: day)
+        let time = calendar.dateComponents([.hour, .minute, .second, .nanosecond], from: source)
+        components.hour = time.hour
+        components.minute = time.minute
+        components.second = time.second
+        components.nanosecond = time.nanosecond
+        return calendar.date(from: components)
+    }
+
+    private static func date(
+        inMonthContaining month: Date,
+        day: Int,
+        timeFrom source: Date,
+        calendar: Calendar
+    ) -> Date? {
+        var components = calendar.dateComponents([.year, .month], from: month)
+        components.day = day
+        let time = calendar.dateComponents([.hour, .minute, .second, .nanosecond], from: source)
+        components.hour = time.hour
+        components.minute = time.minute
+        components.second = time.second
+        components.nanosecond = time.nanosecond
+        guard let result = calendar.date(from: components),
+              calendar.component(.month, from: result) == components.month,
+              calendar.component(.day, from: result) == day else {
+            return nil
+        }
+        return result
+    }
+
+    private static func relativeDate(
+        inMonthContaining month: Date,
+        weekdays: [Int],
+        week: Int?,
+        fallback: Date,
+        calendar: Calendar
+    ) -> Date? {
+        let selected = Set(weekdays.isEmpty
+            ? [calendar.component(.weekday, from: fallback)]
+            : weekdays)
+        guard let monthRange = calendar.range(of: .day, in: .month, for: month) else {
+            return nil
+        }
+        let candidates = monthRange.compactMap {
+            date(
+                inMonthContaining: month, day: $0,
+                timeFrom: fallback, calendar: calendar
+            )
+        }.filter { selected.contains(calendar.component(.weekday, from: $0)) }
+        let ordinal = min(5, max(1, week ?? 1))
+        if ordinal == 5 { return candidates.last }
+        let matchingByWeekday = selected.compactMap { weekday -> Date? in
+            let dates = candidates.filter {
+                calendar.component(.weekday, from: $0) == weekday
+            }
+            let index = ordinal - 1
+            return dates.indices.contains(index) ? dates[index] : nil
+        }
+        return matchingByWeekday.min()
     }
 }

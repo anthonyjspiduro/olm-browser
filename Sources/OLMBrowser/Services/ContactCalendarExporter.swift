@@ -31,6 +31,9 @@ enum ContactCalendarExporter {
             lines.append("FN:\(vCard(contact.displayName))")
             lines.append("N:\(vCard(contact.lastName));\(vCard(contact.firstName));\(vCard(contact.middleName));;")
             if contact.isDistributionList { lines.append("KIND:group") }
+            if let image = contact.contactImageData, let mediaType = imageMediaType(image) {
+                lines.append("PHOTO:data:\(mediaType);base64,\(image.base64EncodedString())")
+            }
             if !contact.company.isEmpty || !contact.department.isEmpty {
                 lines.append("ORG:\(vCard(contact.company));\(vCard(contact.department))")
             }
@@ -73,7 +76,7 @@ enum ContactCalendarExporter {
             "Company", "Department", "Job Title", "Office", "Manager", "Assistant", "Spouse",
             "Email Addresses", "Phone Numbers", "Postal Addresses", "Websites",
             "Birthday", "Anniversary", "Categories", "Distribution List", "Group Members",
-            "Notes", "Modified"
+            "Has Photo", "Notes", "Modified"
         ]
         let rows = contacts.map { contact in
             let postalAddresses = contact.postalAddresses.map { address in
@@ -94,6 +97,7 @@ enum ContactCalendarExporter {
              contact.categories.joined(separator: "; "),
              contact.isDistributionList ? "true" : "false",
              groupMembers,
+             contact.contactImageData == nil ? "false" : "true",
              contact.notes,
              contact.modifiedAt.map(ISO8601DateFormatter().string) ?? ""]
         }
@@ -143,8 +147,33 @@ enum ContactCalendarExporter {
             if !event.timeZoneIdentifier.isEmpty {
                 lines.append("X-OLM-TIMEZONE:\(ical(event.timeZoneIdentifier))")
             }
-            if let recurrence = event.recurrence, let frequency = recurrenceFrequency(recurrence.frequency) {
+            if let recurrence = event.recurrence,
+               let kind = recurrenceRuleKind(recurrence.frequency) {
+                let frequency = kind.frequency
                 var rule = "FREQ=\(frequency);INTERVAL=\(max(1, recurrence.interval))"
+                switch kind {
+                case .daily:
+                    break
+                case .weekly:
+                    let weekdays = recurrence.daysOfWeek.isEmpty
+                        ? [Calendar(identifier: .gregorian).component(.weekday, from: event.startAt)]
+                        : recurrence.daysOfWeek
+                    rule += ";BYDAY=\(weekdays.compactMap(weekdayCode).joined(separator: ","))"
+                case .absoluteMonthly:
+                    rule += ";BYMONTHDAY=\(recurrence.dayOfMonth ?? Calendar.current.component(.day, from: event.startAt))"
+                case .relativeMonthly:
+                    if let code = recurrence.daysOfWeek.first.flatMap(weekdayCode) {
+                        rule += ";BYDAY=\(ordinalPrefix(recurrence.weekOfMonth))\(code)"
+                    }
+                case .absoluteYearly:
+                    rule += ";BYMONTH=\(recurrence.monthOfYear ?? Calendar.current.component(.month, from: event.startAt))"
+                    rule += ";BYMONTHDAY=\(recurrence.dayOfMonth ?? Calendar.current.component(.day, from: event.startAt))"
+                case .relativeYearly:
+                    rule += ";BYMONTH=\(recurrence.monthOfYear ?? Calendar.current.component(.month, from: event.startAt))"
+                    if let code = recurrence.daysOfWeek.first.flatMap(weekdayCode) {
+                        rule += ";BYDAY=\(ordinalPrefix(recurrence.weekOfMonth))\(code)"
+                    }
+                }
                 if let count = recurrence.occurrenceCount, count > 0 { rule += ";COUNT=\(count)" }
                 else if let end = recurrence.endDate, end >= event.startAt {
                     rule += ";UNTIL=\(utc(end))"
@@ -183,16 +212,48 @@ enum ContactCalendarExporter {
     private static func parameter(_ value: String) -> String { "\"" + value.replacingOccurrences(of: "\"", with: "'") + "\"" }
     private static func utc(_ date: Date) -> String { date.formatted(.iso8601.year().month().day().time(includingFractionalSeconds: false).timeZone(separator: .omitted)).replacingOccurrences(of: "-", with: "").replacingOccurrences(of: ":", with: "") }
     private static func day(_ date: Date) -> String { date.formatted(.iso8601.year().month().day()).replacingOccurrences(of: "-", with: "") }
-    private static func recurrenceFrequency(_ value: String) -> String? {
+    private enum RecurrenceRuleKind {
+        case daily, weekly, absoluteMonthly, relativeMonthly, absoluteYearly, relativeYearly
+
+        var frequency: String {
+            switch self {
+            case .daily: "DAILY"
+            case .weekly: "WEEKLY"
+            case .absoluteMonthly, .relativeMonthly: "MONTHLY"
+            case .absoluteYearly, .relativeYearly: "YEARLY"
+            }
+        }
+    }
+
+    private static func recurrenceRuleKind(_ value: String) -> RecurrenceRuleKind? {
         switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-        case "0", "daily", "day", "recursdaily", "opfrecurrencepatterndaily": "DAILY"
-        case "1", "weekly", "week", "recursweekly", "opfrecurrencepatternweekly": "WEEKLY"
-        case "2", "3", "monthly", "month", "recursmonthly", "absolutemonthly",
-             "opfrecurrencepatternabsolutemonthly": "MONTHLY"
+        case "0", "daily", "day", "recursdaily", "opfrecurrencepatterndaily":
+            .daily
+        case "1", "weekly", "week", "recursweekly", "opfrecurrencepatternweekly":
+            .weekly
+        case "2", "monthly", "month", "recursmonthly", "absolutemonthly",
+             "opfrecurrencepatternabsolutemonthly":
+            .absoluteMonthly
+        case "3", "relativemonthly", "recursmonthnth",
+             "opfrecurrencepatternrelativemonthly":
+            .relativeMonthly
         case "4", "5", "yearly", "annual", "year", "recursyearly", "absoluteyearly",
-             "opfrecurrencepatternabsoluteyearly": "YEARLY"
+             "opfrecurrencepatternabsoluteyearly":
+            .absoluteYearly
+        case "6", "relativeyearly", "recursyearnth",
+             "opfrecurrencepatternrelativeyearly":
+            .relativeYearly
         default: nil
         }
+    }
+
+    private static func weekdayCode(_ weekday: Int) -> String? {
+        [1: "SU", 2: "MO", 3: "TU", 4: "WE", 5: "TH", 6: "FR", 7: "SA"][weekday]
+    }
+
+    private static func ordinalPrefix(_ value: Int?) -> String {
+        let week = min(5, max(1, value ?? 1))
+        return week == 5 ? "-1" : String(week)
     }
     private static func opaqueUID(_ value: String) -> String {
         var hash: UInt64 = 14_695_981_039_346_656_037
@@ -201,6 +262,18 @@ enum ContactCalendarExporter {
             hash &*= 1_099_511_628_211
         }
         return "\(String(hash, radix: 16))@olm-browser.local"
+    }
+
+    private static func imageMediaType(_ data: Data) -> String? {
+        let bytes = [UInt8](data.prefix(12))
+        if bytes.starts(with: [0xFF, 0xD8, 0xFF]) { return "image/jpeg" }
+        if bytes.starts(with: [0x89, 0x50, 0x4E, 0x47]) { return "image/png" }
+        if bytes.starts(with: [0x47, 0x49, 0x46, 0x38]) { return "image/gif" }
+        if bytes.starts(with: [0x49, 0x49, 0x2A, 0x00])
+            || bytes.starts(with: [0x4D, 0x4D, 0x00, 0x2A]) {
+            return "image/tiff"
+        }
+        return nil
     }
     private static func attendeeRole(_ value: String) -> String? {
         switch value.lowercased() {

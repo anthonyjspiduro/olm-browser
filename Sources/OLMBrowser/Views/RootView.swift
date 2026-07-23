@@ -47,6 +47,7 @@ private struct BrowserView: View {
                 case .mail: MessageListView()
                 case .contacts: ContactListView()
                 case .calendar: CalendarWorkspaceMiddleView()
+                case .notes: NoteListView()
                 }
             }
             .navigationSplitViewColumnWidth(min: 300, ideal: 370, max: 520)
@@ -55,6 +56,7 @@ private struct BrowserView: View {
             case .mail: MessageDetailView()
             case .contacts: ContactDetailView()
             case .calendar: CalendarWorkspaceRightView()
+            case .notes: NoteDetailView()
             }
         }
         .navigationTitle(store.snapshot?.identity.displayName ?? "OLM Browser")
@@ -87,6 +89,7 @@ private struct BrowserView: View {
         case .mail: "Search entire archive"
         case .contacts: "Search contacts"
         case .calendar: "Search calendar"
+        case .notes: "Search notes"
         }
     }
 }
@@ -119,6 +122,10 @@ private struct ArchiveInformationView: View {
                     row("Unsupported recurrence", status.itemDiagnostics.unsupportedRecurrencePatterns.formatted())
                     row("Recurrence exceptions", status.itemDiagnostics.recurrenceExceptions.formatted())
                     row("Canceled events", status.itemDiagnostics.cancelledCalendarEvents.formatted())
+                    row("Parsed note collections", status.itemDiagnostics.parsedNoteCollections.formatted())
+                    row("Failed note collections", status.itemDiagnostics.failedNoteCollections.formatted())
+                    row("Parsed notes", status.itemDiagnostics.parsedNotes.formatted())
+                    row("Detected task collections", status.itemDiagnostics.discoveredTaskCollections.formatted())
                 }
                 .font(.callout)
             }

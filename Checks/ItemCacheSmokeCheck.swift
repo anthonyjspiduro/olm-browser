@@ -34,16 +34,24 @@ enum ItemCacheSmokeCheck {
             reminderMinutes: nil, recurrence: nil,
             timeZoneIdentifier: "America/New_York"
         )
+        let note = NoteRecord(
+            id: "note-1", sourceID: "notes.xml", text: "Synthetic note",
+            createdAt: Date(timeIntervalSince1970: 400),
+            modifiedAt: Date(timeIntervalSince1970: 500)
+        )
 
         cache.storeContacts([contact], sourceID: "contacts.xml")
         cache.storeCalendarEvents([event], sourceID: "calendar.xml")
+        cache.storeNotes([note], sourceID: "notes.xml")
         require(cache.contacts(for: "contacts.xml") == [contact], "contact round trip")
         require(cache.calendarEvents(for: "calendar.xml") == [event], "calendar round trip")
+        require(cache.notes(for: "notes.xml") == [note], "note round trip")
         require(cache.contacts(for: "other.xml") == nil, "source isolation")
         require(cache.byteCount > 0, "cache size")
         try cache.removeAll()
         require(cache.contacts(for: "contacts.xml") == nil, "cache deletion")
-        print("Contact and calendar cache checks passed")
+        require(cache.notes(for: "notes.xml") == nil, "note cache deletion")
+        print("Contact, calendar, and note cache checks passed")
     }
 
     private static func require(_ condition: @autoclosure () -> Bool, _ label: String) {

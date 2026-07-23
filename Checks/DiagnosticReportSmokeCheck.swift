@@ -47,6 +47,8 @@ enum DiagnosticReportSmokeCheck {
             )],
             contactSources: [],
             calendarSources: [],
+            noteSources: [],
+            taskSources: [],
             messages: [message]
         )
         let status = ArchiveOperationalStatus(
@@ -68,7 +70,9 @@ enum DiagnosticReportSmokeCheck {
                 calendarEventsMissingDates: 2, calendarEventsMissingTitles: 3,
                 recurringCalendarEvents: 44, unsupportedRecurrencePatterns: 5,
                 recurrenceExceptions: 7, cancelledCalendarEvents: 8,
-                calendarEventsWithTimeZones: 450
+                calendarEventsWithTimeZones: 450,
+                parsedNoteCollections: 1, failedNoteCollections: 0,
+                parsedNotes: 12, discoveredTaskCollections: 2
             )
         )
         let progress = IndexProgress(indexed: 120, total: 123, isComplete: false, failed: 2)
@@ -81,7 +85,7 @@ enum DiagnosticReportSmokeCheck {
         let text = String(decoding: data, as: UTF8.self)
         try require(!text.contains(privateMarker), "report excludes private identifiers and content")
         let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-        try require(object?["schemaVersion"] as? Int == 3, "schema version")
+        try require(object?["schemaVersion"] as? Int == 4, "schema version")
         try require(object?["archiveByteCount"] as? Int == 9_876_543, "archive size")
         try require(object?["messageEntries"] as? Int == 123, "message count")
         try require(object?["searchIndexedEntries"] as? Int == 120, "index progress")
@@ -92,6 +96,8 @@ enum DiagnosticReportSmokeCheck {
         try require(object?["contactDistributionLists"] as? Int == 3, "distribution-list count")
         try require(object?["parsedCalendarEvents"] as? Int == 500, "parsed calendar count")
         try require(object?["unsupportedRecurrencePatterns"] as? Int == 5, "recurrence diagnostic count")
+        try require(object?["parsedNotes"] as? Int == 12, "parsed note count")
+        try require(object?["discoveredTaskCollections"] as? Int == 2, "task collection count")
         let privacy = object?["privacy"] as? [String: Any]
         try require(privacy?.values.allSatisfy { ($0 as? Bool) == false } == true, "privacy declaration")
         print("Privacy-preserving diagnostic report smoke check passed")

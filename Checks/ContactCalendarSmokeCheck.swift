@@ -30,6 +30,7 @@ enum ContactCalendarSmokeCheck {
           <OPFContactCopyBusinessAddressCountry>US</OPFContactCopyBusinessAddressCountry>
           <OPFContactCopyBirthday>1980-04-12T00:00:00Z</OPFContactCopyBirthday>
           <OPFContactCopyCategory>Recovery;VIP</OPFContactCopyCategory>
+          <OPFContactCopyContactImage>data:image/png;base64,iVBORw0KGgo=</OPFContactCopyContactImage>
           <OPFContactCopyNotesPlain>Synthetic note</OPFContactCopyNotesPlain>
           <OPFContactCopyModDate>2026-07-22T14:30:00Z</OPFContactCopyModDate>
         </contact>
@@ -38,6 +39,10 @@ enum ContactCalendarSmokeCheck {
           <OPFContactIsDistributionList>1</OPFContactIsDistributionList>
           <distributionListMember OPFDistributionListMemberName="Member One" OPFDistributionListMemberAddress="member1@example.invalid" />
           <distributionListMember OPFDistributionListMemberName="Member Two" OPFDistributionListMemberAddress="member2@example.invalid" />
+          <contactListMember>
+            <OPFContactMemberDisplayName>Member Three</OPFContactMemberDisplayName>
+            <OPFContactMemberEmailAddress>member3@example.invalid</OPFContactMemberEmailAddress>
+          </contactListMember>
         </contact></contacts>
         """
         let contactProgress = ProgressRecorder()
@@ -55,8 +60,9 @@ enum ContactCalendarSmokeCheck {
         require(contacts[0].nickname == "Recovery", "contact nickname")
         require(contacts[0].department == "Operations", "contact department")
         require(contacts[0].websites == ["https://example.invalid/recovery"], "contact website")
+        require(contacts[0].contactImageData?.count == 8, "bounded contact image recovery")
         require(contacts[1].isDistributionList, "distribution-list recognition")
-        require(contacts[1].groupMembers.count == 2, "distribution-list members")
+        require(contacts[1].groupMembers.count == 3, "distribution-list member variants")
         require(contactProgress.lastValue == contacts.count, "contact parse progress")
 
         let calendarSource = ArchiveItemSource(
@@ -80,6 +86,7 @@ enum ContactCalendarSmokeCheck {
           <OPFCalendarEventCopyRecurrence>
             <OPFRecurrencePatternType>weekly</OPFRecurrencePatternType>
             <OPFRecurrencePatternInterval>2</OPFRecurrencePatternInterval>
+            <OPFRecurrenceIsNumbered>1</OPFRecurrenceIsNumbered>
             <OPFRecurrenceGetOccurenceCount>4</OPFRecurrenceGetOccurenceCount>
           </OPFCalendarEventCopyRecurrence>
         </appointment></appointments>
@@ -102,12 +109,13 @@ enum ContactCalendarSmokeCheck {
         require(vcard.contains("BEGIN:VCARD") && vcard.contains("EMAIL;TYPE=WORK:recovery@example.invalid"), "vCard export")
         require(vcard.contains("ADR;TYPE=BUSINESS") && vcard.contains("BDAY:19800412"), "vCard address and birthday")
         require(vcard.contains("KIND:group") && vcard.contains("MEMBER:mailto:member1@example.invalid"), "vCard group export")
+        require(vcard.contains("PHOTO:data:image/png;base64,iVBORw0KGgo="), "vCard photo export")
         let contactCSV = String(decoding: ContactCalendarExporter.contactData(contacts, format: .csv), as: UTF8.self)
         require(contactCSV.contains("\"Recovery Contact\"") && contactCSV.contains("\"555-0100\""), "contact CSV export")
         let ics = String(decoding: ContactCalendarExporter.calendarData(events, format: .ics), as: UTF8.self)
         let unfoldedICS = ics.replacingOccurrences(of: "\r\n ", with: "")
         require(ics.contains("BEGIN:VCALENDAR") && ics.contains("DTSTART:20260722T150000Z"), "iCalendar date export")
-        require(ics.contains("RRULE:FREQ=WEEKLY;INTERVAL=2;COUNT=4"), "iCalendar recurrence export")
+        require(ics.contains("RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=WE;COUNT=4"), "iCalendar recurrence export")
         require(unfoldedICS.contains("ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED;RSVP=TRUE"), "iCalendar attendee export")
         let calendarCSV = String(decoding: ContactCalendarExporter.calendarData(events, format: .csv), as: UTF8.self)
         require(calendarCSV.contains("\"Recovery Window\"") && calendarCSV.contains("\"Recovery Lab\""), "calendar CSV export")

@@ -19,8 +19,10 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
     private var checksumFailureEntryPaths: Set<String> = []
     private var contactsBySource: [ArchiveItemSource.ID: [ContactRecord]] = [:]
     private var eventsBySource: [ArchiveItemSource.ID: [CalendarEventRecord]] = [:]
+    private var notesBySource: [ArchiveItemSource.ID: [NoteRecord]] = [:]
     private var failedContactSourceIDs: Set<ArchiveItemSource.ID> = []
     private var failedCalendarSourceIDs: Set<ArchiveItemSource.ID> = []
+    private var failedNoteSourceIDs: Set<ArchiveItemSource.ID> = []
 
     func openArchive(at url: URL) throws -> ArchiveSnapshot {
         try openArchive(at: url, progress: { _ in })
@@ -57,7 +59,8 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
         )
         guard !openedCatalog.messageEntriesByFolder.isEmpty
                 || !openedCatalog.contactSources.isEmpty
-                || !openedCatalog.calendarSources.isEmpty else {
+                || !openedCatalog.calendarSources.isEmpty
+                || !openedCatalog.noteSources.isEmpty else {
             throw ArchiveReaderError.noMessagesFound
         }
 
@@ -100,8 +103,10 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
             checksumFailureEntryPaths = []
             contactsBySource = [:]
             eventsBySource = [:]
+            notesBySource = [:]
             failedContactSourceIDs = []
             failedCalendarSourceIDs = []
+            failedNoteSourceIDs = []
         }
 
         return ArchiveSnapshot(
@@ -115,6 +120,8 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
             folders: folders,
             contactSources: openedCatalog.contactSources,
             calendarSources: openedCatalog.calendarSources,
+            noteSources: openedCatalog.noteSources,
+            taskSources: openedCatalog.taskSources,
             messages: []
         )
     }
@@ -187,6 +194,57 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
         let start = min(max(0, offset), records.count)
         let end = start + min(max(1, limit), records.count - start)
         return CalendarEventPage(records: Array(records[start..<end]), nextOffset: end, totalCount: records.count)
+    }
+
+    func loadNotes(
+        sourceID: ArchiveItemSource.ID?,
+        matching query: String,
+        offset: Int,
+        limit: Int
+    ) throws -> NotePage {
+        try loadNotes(
+            sourceID: sourceID, matching: query, offset: offset, limit: limit,
+            progress: { _ in }
+        )
+    }
+
+    func loadNotes(
+        sourceID: ArchiveItemSource.ID?,
+        matching query: String,
+        offset: Int,
+        limit: Int,
+        progress: @escaping @Sendable (ArchiveItemLoadProgress) -> Void
+    ) throws -> NotePage {
+        beginInteractiveRead()
+        defer { endInteractiveRead() }
+        let sources = stateLock.withLock {
+            catalog.noteSources.filter { sourceID == nil || $0.id == sourceID }
+        }
+        var records: [NoteRecord] = []
+        let startedAt = Date()
+        for source in sources {
+            if Task.isCancelled { throw CancellationError() }
+            records.append(contentsOf: try notes(
+                for: source, startedAt: startedAt, progress: progress
+            ))
+        }
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !needle.isEmpty {
+            records = records.filter {
+                $0.searchText.localizedCaseInsensitiveContains(needle)
+            }
+        }
+        records.sort {
+            ($0.modifiedAt ?? $0.createdAt ?? .distantPast)
+                > ($1.modifiedAt ?? $1.createdAt ?? .distantPast)
+        }
+        let start = min(max(0, offset), records.count)
+        let end = start + min(max(1, limit), records.count - start)
+        return NotePage(
+            records: Array(records[start..<end]),
+            nextOffset: end,
+            totalCount: records.count
+        )
     }
 
     func loadMessages(in folderID: MailFolder.ID, offset: Int, limit: Int) throws -> MessagePage {
@@ -352,6 +410,7 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
             let entries = archive?.entries ?? []
             let parsedContacts = contactsBySource.values.flatMap { $0 }
             let parsedEvents = eventsBySource.values.flatMap { $0 }
+            let parsedNotes = notesBySource.values.flatMap { $0 }
             let itemDiagnostics = ArchiveItemDiagnosticSummary(
                 parsedContactCollections: contactsBySource.count,
                 failedContactCollections: failedContactSourceIDs.count,
@@ -373,7 +432,11 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
                 },
                 recurrenceExceptions: parsedEvents.count { $0.recurrenceID != nil },
                 cancelledCalendarEvents: parsedEvents.count { $0.isCancelled },
-                calendarEventsWithTimeZones: parsedEvents.count { !$0.timeZoneIdentifier.isEmpty }
+                calendarEventsWithTimeZones: parsedEvents.count { !$0.timeZoneIdentifier.isEmpty },
+                parsedNoteCollections: notesBySource.count,
+                failedNoteCollections: failedNoteSourceIDs.count,
+                parsedNotes: parsedNotes.count,
+                discoveredTaskCollections: catalog.taskSources.count
             )
             return ArchiveOperationalStatus(
                 archiveEntries: entries.count,
@@ -543,6 +606,70 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
         } catch {
             if !(error is CancellationError) {
                 stateLock.withLock { _ = failedCalendarSourceIDs.insert(source.id) }
+            }
+            throw error
+        }
+    }
+
+    private func notes(
+        for source: ArchiveItemSource,
+        startedAt: Date,
+        progress: @escaping @Sendable (ArchiveItemLoadProgress) -> Void
+    ) throws -> [NoteRecord] {
+        itemParseLock.lock()
+        defer { itemParseLock.unlock() }
+        if let loaded = stateLock.withLock({ notesBySource[source.id] }) {
+            progress(itemProgress(
+                source: source, phase: "Using loaded notes", bytes: 0, total: 0,
+                records: loaded.count, startedAt: startedAt, cacheHit: true
+            ))
+            return loaded
+        }
+        if let cached = stateLock.withLock({ itemCache?.notes(for: source.id) }) {
+            stateLock.withLock { notesBySource[source.id] = cached }
+            progress(itemProgress(
+                source: source, phase: "Loading cached notes", bytes: 0, total: 0,
+                records: cached.count, startedAt: startedAt, cacheHit: true
+            ))
+            return cached
+        }
+        let state = stateLock.withLock {
+            (archive, allEntriesByPath[source.entryPath]?.first)
+        }
+        guard let archive = state.0, let entry = state.1 else {
+            throw ArchiveReaderError.unreadableArchive
+        }
+        do {
+            progress(itemProgress(
+                source: source, phase: "Reading notes collection", bytes: 0,
+                total: entry.uncompressedSize, records: 0,
+                startedAt: startedAt, cacheHit: false
+            ))
+            let data = try archive.data(
+                for: entry, maximumSize: Self.maximumItemCollectionSize
+            )
+            let parsed = OLMNoteParser().parse(data: data, source: source) { count in
+                progress(self.itemProgress(
+                    source: source, phase: "Parsing notes",
+                    bytes: UInt64(data.count), total: entry.uncompressedSize,
+                    records: count, startedAt: startedAt, cacheHit: false
+                ))
+            }
+            if Task.isCancelled { throw CancellationError() }
+            stateLock.withLock {
+                notesBySource[source.id] = parsed
+                failedNoteSourceIDs.remove(source.id)
+                itemCache?.storeNotes(parsed, sourceID: source.id)
+            }
+            progress(itemProgress(
+                source: source, phase: "Notes collection ready",
+                bytes: UInt64(data.count), total: entry.uncompressedSize,
+                records: parsed.count, startedAt: startedAt, cacheHit: false
+            ))
+            return parsed
+        } catch {
+            if !(error is CancellationError) {
+                stateLock.withLock { _ = failedNoteSourceIDs.insert(source.id) }
             }
             throw error
         }
@@ -732,6 +859,14 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
                 let source = Self.itemSource(for: entry, kind: .calendar)
                 catalog.calendarSources.append(source)
                 if let account = source.accountID { catalog.accountAddresses.insert(account) }
+            } else if entry.path.hasSuffix("/Notes.xml") || entry.path == "Local/Notes/Notes.xml" {
+                let source = Self.itemSource(for: entry, kind: .notes)
+                catalog.noteSources.append(source)
+                if let account = source.accountID { catalog.accountAddresses.insert(account) }
+            } else if entry.path.hasSuffix("/Tasks.xml") || entry.path == "Local/Tasks/Tasks.xml" {
+                let source = Self.itemSource(for: entry, kind: .tasks)
+                catalog.taskSources.append(source)
+                if let account = source.accountID { catalog.accountAddresses.insert(account) }
             }
             guard entry.path.hasPrefix("Accounts/"),
                   let markerRange = entry.path.range(of: marker),
@@ -759,6 +894,8 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
         }
         catalog.contactSources.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         catalog.calendarSources.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        catalog.noteSources.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        catalog.taskSources.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         progress(.init(
             phase: "Cataloging Outlook data",
             completedUnits: entries.count, totalUnits: entries.count,
@@ -770,7 +907,14 @@ final class NativeOLMArchiveReader: OLMArchiveReading, @unchecked Sendable {
     private static func itemSource(for entry: ZIPEntry, kind: ArchiveItemKind) -> ArchiveItemSource {
         let components = entry.path.split(separator: "/").map(String.init)
         let account = components.first == "Accounts" && components.count > 1 ? components[1] : nil
-        let parentName = components.dropLast().last ?? (kind == .contacts ? "Contacts" : "Calendar")
+        let fallbackName: String
+        switch kind {
+        case .contacts: fallbackName = "Contacts"
+        case .calendar: fallbackName = "Calendar"
+        case .notes: fallbackName = "Notes"
+        case .tasks: fallbackName = "Tasks"
+        }
+        let parentName = components.dropLast().last ?? fallbackName
         return ArchiveItemSource(
             id: entry.path, accountID: account, name: parentName,
             kind: kind, entryPath: entry.path
@@ -867,6 +1011,8 @@ private struct Catalog: Sendable {
     var messageEntriesByFolder: [String: [ZIPEntry]] = [:]
     var contactSources: [ArchiveItemSource] = []
     var calendarSources: [ArchiveItemSource] = []
+    var noteSources: [ArchiveItemSource] = []
+    var taskSources: [ArchiveItemSource] = []
 }
 
 private extension String.SubSequence {

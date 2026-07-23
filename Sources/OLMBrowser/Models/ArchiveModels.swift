@@ -50,6 +50,8 @@ struct MailFolder: Identifiable, Hashable, Sendable {
 enum ArchiveItemKind: String, Hashable, Sendable {
     case contacts
     case calendar
+    case notes
+    case tasks
 }
 
 struct ArchiveItemSource: Identifiable, Hashable, Sendable {
@@ -122,6 +124,7 @@ struct ContactRecord: Identifiable, Hashable, Codable, Sendable {
     var anniversary: Date?
     var isDistributionList: Bool = false
     var groupMembers: [ContactGroupMember] = []
+    var contactImageData: Data?
 
     var searchText: String {
         ([displayName, firstName, middleName, lastName, company, jobTitle, notes,
@@ -150,6 +153,10 @@ struct CalendarRecurrence: Hashable, Codable, Sendable {
     let interval: Int
     let occurrenceCount: Int?
     let endDate: Date?
+    var dayOfMonth: Int? = nil
+    var daysOfWeek: [Int] = []
+    var weekOfMonth: Int? = nil
+    var monthOfYear: Int? = nil
 }
 
 struct CalendarEventRecord: Identifiable, Hashable, Codable, Sendable {
@@ -195,6 +202,30 @@ struct CalendarEventPage: Sendable {
     var hasMore: Bool { nextOffset < totalCount }
 }
 
+struct NoteRecord: Identifiable, Hashable, Codable, Sendable {
+    let id: String
+    let sourceID: ArchiveItemSource.ID
+    let text: String
+    let createdAt: Date?
+    let modifiedAt: Date?
+
+    var title: String {
+        let firstLine = text.split(whereSeparator: \.isNewline).first
+            .map(String.init)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return firstLine.isEmpty ? "Untitled Note" : firstLine
+    }
+
+    var searchText: String { text }
+}
+
+struct NotePage: Sendable {
+    let records: [NoteRecord]
+    let nextOffset: Int
+    let totalCount: Int
+    var hasMore: Bool { nextOffset < totalCount }
+}
+
 struct ArchiveItemLoadProgress: Sendable {
     let kind: ArchiveItemKind
     let sourceName: String
@@ -230,6 +261,10 @@ struct ArchiveItemDiagnosticSummary: Sendable {
     let recurrenceExceptions: Int
     let cancelledCalendarEvents: Int
     let calendarEventsWithTimeZones: Int
+    let parsedNoteCollections: Int
+    let failedNoteCollections: Int
+    let parsedNotes: Int
+    let discoveredTaskCollections: Int
 
     static let empty = ArchiveItemDiagnosticSummary(
         parsedContactCollections: 0, failedContactCollections: 0,
@@ -239,7 +274,9 @@ struct ArchiveItemDiagnosticSummary: Sendable {
         parsedCalendarEvents: 0, calendarEventsMissingDates: 0,
         calendarEventsMissingTitles: 0, recurringCalendarEvents: 0,
         unsupportedRecurrencePatterns: 0, recurrenceExceptions: 0,
-        cancelledCalendarEvents: 0, calendarEventsWithTimeZones: 0
+        cancelledCalendarEvents: 0, calendarEventsWithTimeZones: 0,
+        parsedNoteCollections: 0, failedNoteCollections: 0,
+        parsedNotes: 0, discoveredTaskCollections: 0
     )
 }
 
@@ -376,6 +413,8 @@ struct ArchiveSnapshot: Sendable {
     let folders: [MailFolder]
     let contactSources: [ArchiveItemSource]
     let calendarSources: [ArchiveItemSource]
+    let noteSources: [ArchiveItemSource]
+    let taskSources: [ArchiveItemSource]
     let messages: [MessageSummary]
 }
 

@@ -9,7 +9,7 @@ enum DiagnosticReportExporter {
     ) throws -> Data {
         let items = status.itemDiagnostics
         let report = Report(
-            schemaVersion: 3,
+            schemaVersion: 4,
             generatedAt: generatedAt,
             archiveByteCount: snapshot.identity.size,
             accountCount: snapshot.accounts.count,
@@ -46,12 +46,16 @@ enum DiagnosticReportExporter {
             recurrenceExceptions: items.recurrenceExceptions,
             cancelledCalendarEvents: items.cancelledCalendarEvents,
             calendarEventsWithTimeZones: items.calendarEventsWithTimeZones,
+            parsedNoteCollections: items.parsedNoteCollections,
+            failedNoteCollections: items.failedNoteCollections,
+            parsedNotes: items.parsedNotes,
+            discoveredTaskCollections: items.discoveredTaskCollections,
             privacy: PrivacyStatement(
                 containsArchivePath: false,
                 containsMessageContent: false,
                 containsParticipantData: false,
                 containsAttachmentNamesOrPayloads: false,
-                containsContactOrCalendarContent: false
+                containsContactCalendarNoteOrTaskContent: false
             )
         )
         let encoder = JSONEncoder()
@@ -98,6 +102,10 @@ enum DiagnosticReportExporter {
         let recurrenceExceptions: Int
         let cancelledCalendarEvents: Int
         let calendarEventsWithTimeZones: Int
+        let parsedNoteCollections: Int
+        let failedNoteCollections: Int
+        let parsedNotes: Int
+        let discoveredTaskCollections: Int
         let privacy: PrivacyStatement
     }
 
@@ -106,6 +114,6 @@ enum DiagnosticReportExporter {
         let containsMessageContent: Bool
         let containsParticipantData: Bool
         let containsAttachmentNamesOrPayloads: Bool
-        let containsContactOrCalendarContent: Bool
+        let containsContactCalendarNoteOrTaskContent: Bool
     }
 }

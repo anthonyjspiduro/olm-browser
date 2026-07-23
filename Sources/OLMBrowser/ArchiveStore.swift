@@ -6,15 +6,23 @@ enum BrowserMode: String, CaseIterable, Identifiable, Sendable {
     case mail
     case calendar
     case contacts
+    case notes
     var id: String { rawValue }
     var label: String { rawValue.capitalized }
     var symbolName: String {
-        switch self { case .mail: "envelope"; case .contacts: "person.crop.circle"; case .calendar: "calendar" }
+        switch self {
+        case .mail: "envelope"
+        case .contacts: "person.crop.circle"
+        case .calendar: "calendar"
+        case .notes: "note.text"
+        }
     }
 }
 
 enum CalendarWorkspaceViewMode: String, CaseIterable, Identifiable, Sendable {
     case month
+    case week
+    case day
     case list
     var id: String { rawValue }
     var label: String { rawValue.capitalized }
@@ -44,9 +52,11 @@ final class ArchiveStore: ObservableObject {
     @Published var browserMode: BrowserMode = .mail
     @Published var selectedContactSourceID: ArchiveItemSource.ID?
     @Published var selectedCalendarSourceID: ArchiveItemSource.ID?
+    @Published var selectedNoteSourceID: ArchiveItemSource.ID?
     @Published var showsAllCalendarSources = false
     @Published var selectedContactIDs: Set<ContactRecord.ID> = []
     @Published var selectedCalendarEventIDs: Set<CalendarEventRecord.ID> = []
+    @Published var selectedNoteIDs: Set<NoteRecord.ID> = []
     @Published var displayedCalendarMonth = Calendar.current.dateInterval(of: .month, for: Date())?.start ?? Date()
     @Published var selectedCalendarDate = Calendar.current.startOfDay(for: Date())
     @Published var calendarWorkspaceViewMode: CalendarWorkspaceViewMode = .month
@@ -54,6 +64,7 @@ final class ArchiveStore: ObservableObject {
     @Published var calendarRangeEnd = Calendar.current.date(byAdding: .day, value: 30, to: Date()) ?? Date()
     @Published private(set) var contacts: [ContactRecord] = []
     @Published private(set) var calendarEvents: [CalendarEventRecord] = []
+    @Published private(set) var notes: [NoteRecord] = []
     @Published private(set) var isLoadingItems = false
     @Published private(set) var itemLoadProgress: ArchiveItemLoadProgress?
     @Published private(set) var itemResultTotal = 0
@@ -102,6 +113,8 @@ final class ArchiveStore: ObservableObject {
     var selectedCalendarEvents: [CalendarEventRecord] { calendarEvents.filter { selectedCalendarEventIDs.contains($0.id) } }
     var selectedContact: ContactRecord? { selectedContacts.count == 1 ? selectedContacts[0] : nil }
     var selectedCalendarEvent: CalendarEventRecord? { selectedCalendarEvents.count == 1 ? selectedCalendarEvents[0] : nil }
+    var selectedNotes: [NoteRecord] { notes.filter { selectedNoteIDs.contains($0.id) } }
+    var selectedNote: NoteRecord? { selectedNotes.count == 1 ? selectedNotes[0] : nil }
     var hasMoreItems: Bool { nextItemOffset < itemResultTotal }
 
     var hasMoreMessages: Bool {
@@ -171,14 +184,21 @@ final class ArchiveStore: ObservableObject {
                 archiveSessionID = UUID()
                 unreadCountsAreAccurate = false
                 snapshot = loaded
-                browserMode = loaded.folders.isEmpty
-                    ? (loaded.contactSources.isEmpty ? .calendar : .contacts)
-                    : .mail
+                if !loaded.folders.isEmpty {
+                    browserMode = .mail
+                } else if !loaded.contactSources.isEmpty {
+                    browserMode = .contacts
+                } else if !loaded.calendarSources.isEmpty {
+                    browserMode = .calendar
+                } else {
+                    browserMode = .notes
+                }
                 searchText = ""
                 selectedFolderID = loaded.folders.first(where: { $0.kind == .inbox })?.id
                     ?? loaded.folders.first?.id
                 selectedContactSourceID = loaded.contactSources.first?.id
                 selectedCalendarSourceID = loaded.calendarSources.first?.id
+                selectedNoteSourceID = loaded.noteSources.first?.id
                 showsAllCalendarSources = false
                 resetItemState()
                 resetPageState()
@@ -377,6 +397,7 @@ final class ArchiveStore: ObservableObject {
         selectedFolderID = nil
         selectedContactSourceID = nil
         selectedCalendarSourceID = nil
+        selectedNoteSourceID = nil
         showsAllCalendarSources = false
         selectedMessageID = nil
         searchText = ""
@@ -666,6 +687,8 @@ final class ArchiveStore: ObservableObject {
             selectedContactSourceID = snapshot?.contactSources.first?.id
         } else if browserMode == .calendar, selectedCalendarSourceID == nil, !showsAllCalendarSources {
             selectedCalendarSourceID = snapshot?.calendarSources.first?.id
+        } else if browserMode == .notes, selectedNoteSourceID == nil {
+            selectedNoteSourceID = snapshot?.noteSources.first?.id
         }
         resetItemState()
         if browserMode != .mail { loadNextItems() }
@@ -678,7 +701,13 @@ final class ArchiveStore: ObservableObject {
     }
 
     func itemDidAppear(_ id: String) {
-        let ids = browserMode == .contacts ? contacts.map(\.id) : calendarEvents.map(\.id)
+        let ids: [String]
+        switch browserMode {
+        case .contacts: ids = contacts.map(\.id)
+        case .calendar: ids = calendarEvents.map(\.id)
+        case .notes: ids = notes.map(\.id)
+        case .mail: ids = []
+        }
         guard hasMoreItems, let index = ids.firstIndex(of: id), index >= max(0, ids.count - 15) else { return }
         loadNextItems()
     }
@@ -689,7 +718,13 @@ final class ArchiveStore: ObservableObject {
         let mode = browserMode
         let offset = nextItemOffset
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let sourceID = mode == .contacts ? selectedContactSourceID : selectedCalendarSourceID
+        let sourceID: ArchiveItemSource.ID?
+        switch mode {
+        case .contacts: sourceID = selectedContactSourceID
+        case .calendar: sourceID = selectedCalendarSourceID
+        case .notes: sourceID = selectedNoteSourceID
+        case .mail: return
+        }
         let reader = reader
         let loadID = UUID()
         itemLoadID = loadID
@@ -702,7 +737,8 @@ final class ArchiveStore: ObservableObject {
         }
         itemLoadTask = Task {
             do {
-                if mode == .contacts {
+                switch mode {
+                case .contacts:
                     let worker = Task.detached(priority: .userInitiated) {
                         try reader.loadContacts(
                             sourceID: sourceID, matching: query, offset: offset,
@@ -720,7 +756,7 @@ final class ArchiveStore: ObservableObject {
                     if offset == 0 { contacts = page.records } else { contacts.append(contentsOf: page.records) }
                     nextItemOffset = page.nextOffset; itemResultTotal = page.totalCount
                     if offset == 0 { selectedContactIDs = Set(page.records.prefix(1).map(\.id)) }
-                } else {
+                case .calendar:
                     let worker = Task.detached(priority: .userInitiated) {
                         try reader.loadCalendarEvents(
                             sourceID: sourceID, matching: query, offset: offset,
@@ -745,6 +781,35 @@ final class ArchiveStore: ObservableObject {
                                 ?? selectedCalendarDate
                         }
                     }
+                case .notes:
+                    let worker = Task.detached(priority: .userInitiated) {
+                        try reader.loadNotes(
+                            sourceID: sourceID, matching: query, offset: offset,
+                            limit: 100, progress: reportProgress
+                        )
+                    }
+                    let page = try await withTaskCancellationHandler {
+                        try await worker.value
+                    } onCancel: {
+                        worker.cancel()
+                    }
+                    guard !Task.isCancelled, itemLoadID == loadID,
+                          browserMode == mode, selectedNoteSourceID == sourceID,
+                          searchText.trimmingCharacters(in: .whitespacesAndNewlines) == query else {
+                        return
+                    }
+                    if offset == 0 {
+                        notes = page.records
+                    } else {
+                        notes.append(contentsOf: page.records)
+                    }
+                    nextItemOffset = page.nextOffset
+                    itemResultTotal = page.totalCount
+                    if offset == 0 {
+                        selectedNoteIDs = Set(page.records.prefix(1).map(\.id))
+                    }
+                case .mail:
+                    return
                 }
             } catch {
                 if !Task.isCancelled { errorMessage = error.localizedDescription }
@@ -775,8 +840,8 @@ final class ArchiveStore: ObservableObject {
     }
 
     private func resetItemState() {
-        contacts = []; calendarEvents = []
-        selectedContactIDs = []; selectedCalendarEventIDs = []
+        contacts = []; calendarEvents = []; notes = []
+        selectedContactIDs = []; selectedCalendarEventIDs = []; selectedNoteIDs = []
         nextItemOffset = 0; itemResultTotal = 0; isLoadingItems = false
         itemLoadProgress = nil
         itemLoadID = UUID()
@@ -843,6 +908,66 @@ final class ArchiveStore: ObservableObject {
         }
     }
 
+    func exportNotes(_ records: [NoteRecord], format: NoteExportFormat) {
+        guard !records.isEmpty else { return }
+        let panel = NSSavePanel()
+        panel.title = records.count == 1 ? "Export Note" : "Export Notes"
+        panel.nameFieldStringValue = records.count == 1
+            ? "\(safeExportName(records[0].title)).\(format.rawValue)"
+            : "OLM Browser Notes.\(format.rawValue)"
+        panel.allowedContentTypes = [noteContentType(format)]
+        guard panel.runModal() == .OK, let destination = panel.url else { return }
+        isExportingItems = true
+        Task {
+            do {
+                try await Task.detached(priority: .userInitiated) {
+                    try NoteExporter.data(records, format: format)
+                        .write(to: destination, options: .atomic)
+                }.value
+            } catch { errorMessage = error.localizedDescription }
+            isExportingItems = false
+        }
+    }
+
+    func exportAllMatchingNotes(format: NoteExportFormat) {
+        let panel = NSSavePanel()
+        panel.title = "Export All Matching Notes"
+        panel.nameFieldStringValue = "OLM Browser Notes.\(format.rawValue)"
+        panel.allowedContentTypes = [noteContentType(format)]
+        guard panel.runModal() == .OK, let destination = panel.url else { return }
+        isExportingItems = true
+        let sourceID = selectedNoteSourceID
+        let query = searchText
+        let reader = reader
+        Task {
+            do {
+                try await Task.detached(priority: .userInitiated) {
+                    let page = try reader.loadNotes(
+                        sourceID: sourceID, matching: query, offset: 0, limit: Int.max
+                    )
+                    try NoteExporter.data(page.records, format: format)
+                        .write(to: destination, options: .atomic)
+                }.value
+            } catch { errorMessage = error.localizedDescription }
+            isExportingItems = false
+        }
+    }
+
+    private func noteContentType(_ format: NoteExportFormat) -> UTType {
+        switch format {
+        case .text: .plainText
+        case .json: .json
+        case .csv: .commaSeparatedText
+        }
+    }
+
+    private func safeExportName(_ value: String) -> String {
+        let invalid = CharacterSet(charactersIn: "/:\\")
+        let cleaned = value.components(separatedBy: invalid).joined(separator: "-")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return String((cleaned.isEmpty ? "Note" : cleaned).prefix(80))
+    }
+
     func exportAllMatchingCalendarEvents(format: CalendarExportFormat) {
         let panel = NSSavePanel()
         panel.title = "Export All Matching Calendar Events"
@@ -856,6 +981,33 @@ final class ArchiveStore: ObservableObject {
                 try await Task.detached(priority: .userInitiated) {
                     let page = try reader.loadCalendarEvents(sourceID: sourceID, matching: query, offset: 0, limit: Int.max)
                     try ContactCalendarExporter.calendarData(page.records, format: format).write(to: destination, options: .atomic)
+                }.value
+            } catch { errorMessage = error.localizedDescription }
+            isExportingItems = false
+        }
+    }
+
+    func exportEntireCalendarAsICS() {
+        let panel = NSSavePanel()
+        panel.title = showsAllCalendarSources
+            ? "Export All Calendars as iCalendar"
+            : "Export Entire Calendar as iCalendar"
+        panel.nameFieldStringValue = showsAllCalendarSources
+            ? "OLM Browser All Calendars.ics"
+            : "OLM Browser Calendar.ics"
+        panel.allowedContentTypes = [UTType(filenameExtension: "ics") ?? .data]
+        guard panel.runModal() == .OK, let destination = panel.url else { return }
+        isExportingItems = true
+        let sourceID = selectedCalendarSourceID
+        let reader = reader
+        Task {
+            do {
+                try await Task.detached(priority: .userInitiated) {
+                    let page = try reader.loadCalendarEvents(
+                        sourceID: sourceID, matching: "", offset: 0, limit: Int.max
+                    )
+                    try ContactCalendarExporter.calendarData(page.records, format: .ics)
+                        .write(to: destination, options: .atomic)
                 }.value
             } catch { errorMessage = error.localizedDescription }
             isExportingItems = false
@@ -924,6 +1076,8 @@ final class ArchiveStore: ObservableObject {
             folders: folders,
             contactSources: current.contactSources,
             calendarSources: current.calendarSources,
+            noteSources: current.noteSources,
+            taskSources: current.taskSources,
             messages: current.messages
         )
         unreadCountsAreAccurate = true
@@ -951,6 +1105,8 @@ final class ArchiveStore: ObservableObject {
             },
             contactSources: current.contactSources,
             calendarSources: current.calendarSources,
+            noteSources: current.noteSources,
+            taskSources: current.taskSources,
             messages: current.messages
         )
         unreadCountsAreAccurate = false

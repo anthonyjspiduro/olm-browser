@@ -12,7 +12,7 @@ enum ArchiveReaderError: LocalizedError {
         case .unreadableArchive:
             "The selected archive could not be opened for reading."
         case .noMessagesFound:
-            "The archive opened, but no supported Outlook mail, contact, or calendar data was found."
+            "The archive opened, but no supported Outlook mail, contact, calendar, or note data was found."
         }
     }
 }
@@ -74,6 +74,14 @@ protocol OLMArchiveReading: Sendable {
         limit: Int,
         progress: @escaping @Sendable (ArchiveItemLoadProgress) -> Void
     ) throws -> CalendarEventPage
+    func loadNotes(sourceID: ArchiveItemSource.ID?, matching query: String, offset: Int, limit: Int) throws -> NotePage
+    func loadNotes(
+        sourceID: ArchiveItemSource.ID?,
+        matching query: String,
+        offset: Int,
+        limit: Int,
+        progress: @escaping @Sendable (ArchiveItemLoadProgress) -> Void
+    ) throws -> NotePage
     func attachmentData(for attachment: AttachmentSummary) throws -> Data
     func operationalStatus() -> ArchiveOperationalStatus
     func folderUnreadCounts() -> [MailFolder.ID: Int]?
@@ -108,5 +116,15 @@ extension OLMArchiveReading {
         progress: @escaping @Sendable (ArchiveItemLoadProgress) -> Void
     ) throws -> CalendarEventPage {
         try loadCalendarEvents(sourceID: sourceID, matching: query, offset: offset, limit: limit)
+    }
+
+    func loadNotes(
+        sourceID: ArchiveItemSource.ID?,
+        matching query: String,
+        offset: Int,
+        limit: Int,
+        progress: @escaping @Sendable (ArchiveItemLoadProgress) -> Void
+    ) throws -> NotePage {
+        try loadNotes(sourceID: sourceID, matching: query, offset: offset, limit: limit)
     }
 }

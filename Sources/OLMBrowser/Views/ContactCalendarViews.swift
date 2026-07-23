@@ -243,7 +243,11 @@ private struct ContactAvatar: View {
 
     var body: some View {
         Group {
-            if contact.isDistributionList {
+            if let data = contact.contactImageData, let image = NSImage(data: data) {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else if contact.isDistributionList {
                 Image(systemName: "person.3.fill")
                     .font(.system(size: size * 0.34, weight: .semibold))
             } else {
@@ -261,6 +265,7 @@ private struct ContactAvatar: View {
                 in: Circle()
             )
             .overlay { Circle().stroke(.white.opacity(0.28), lineWidth: 1) }
+            .clipShape(Circle())
             .accessibilityHidden(true)
     }
 

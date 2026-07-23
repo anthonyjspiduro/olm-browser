@@ -146,6 +146,8 @@ struct PreviewArchiveReader: OLMArchiveReading {
             folders: [inbox, sent, projects],
             contactSources: [],
             calendarSources: [],
+            noteSources: [],
+            taskSources: [],
             messages: messages
         )
     }
@@ -163,6 +165,15 @@ struct PreviewArchiveReader: OLMArchiveReading {
     }
 
     func loadMessageDetails(for message: MessageSummary) throws -> MessageSummary { message }
+
+    func loadNotes(
+        sourceID: ArchiveItemSource.ID?,
+        matching query: String,
+        offset: Int,
+        limit: Int
+    ) throws -> NotePage {
+        NotePage(records: [], nextOffset: 0, totalCount: 0)
+    }
     func loadContacts(sourceID: ArchiveItemSource.ID?, matching query: String, offset: Int, limit: Int) throws -> ContactPage {
         ContactPage(records: [], nextOffset: 0, totalCount: 0)
     }

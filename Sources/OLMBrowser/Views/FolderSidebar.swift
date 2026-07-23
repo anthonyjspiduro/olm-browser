@@ -63,6 +63,38 @@ struct FolderSidebar: View {
                             }
                             if snapshot.calendarSources.isEmpty { ContentUnavailableView("No Calendars", systemImage: "calendar.badge.exclamationmark") }
                         }
+                    case .notes:
+                        Section("Notes") {
+                            ForEach(snapshot.noteSources) { source in
+                                Button {
+                                    store.selectedNoteSourceID = source.id
+                                    store.itemSourceSelectionChanged()
+                                } label: {
+                                    SourceLabel(source: source, systemImage: "note.text")
+                                }
+                                .buttonStyle(.plain)
+                                .fontWeight(
+                                    store.selectedNoteSourceID == source.id
+                                        ? .semibold : .regular
+                                )
+                            }
+                            if snapshot.noteSources.isEmpty {
+                                ContentUnavailableView(
+                                    "No Notes", systemImage: "note.text"
+                                )
+                            }
+                        }
+                        if !snapshot.taskSources.isEmpty {
+                            Section("Detected Record Families") {
+                                Label(
+                                    "\(snapshot.taskSources.count.formatted()) task collections detected",
+                                    systemImage: "checklist"
+                                )
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .help("Task collection schemas require validation before records can be decoded.")
+                            }
+                        }
                     }
                 }
             }

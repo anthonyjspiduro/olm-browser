@@ -1,9 +1,9 @@
 import Foundation
 
-/// Disposable archive-specific cache for parsed contacts and calendar events.
+/// Disposable archive-specific cache for parsed contacts, calendar events, and notes.
 /// The source OLM remains authoritative and is never modified.
 final class OLMItemCache: @unchecked Sendable {
-    private static let schemaVersion = 4
+    private static let schemaVersion = 6
     private let directoryURL: URL
     private let lock = NSLock()
 
@@ -31,6 +31,10 @@ final class OLMItemCache: @unchecked Sendable {
         load(CalendarEnvelope.self, kind: "calendar", sourceID: sourceID)?.records
     }
 
+    func notes(for sourceID: String) -> [NoteRecord]? {
+        load(NoteEnvelope.self, kind: "notes", sourceID: sourceID)?.records
+    }
+
     func storeContacts(_ records: [ContactRecord], sourceID: String) {
         store(ContactEnvelope(schemaVersion: Self.schemaVersion, sourceID: sourceID, records: records),
               kind: "contacts", sourceID: sourceID)
@@ -39,6 +43,12 @@ final class OLMItemCache: @unchecked Sendable {
     func storeCalendarEvents(_ records: [CalendarEventRecord], sourceID: String) {
         store(CalendarEnvelope(schemaVersion: Self.schemaVersion, sourceID: sourceID, records: records),
               kind: "calendar", sourceID: sourceID)
+    }
+
+    func storeNotes(_ records: [NoteRecord], sourceID: String) {
+        store(NoteEnvelope(
+            schemaVersion: Self.schemaVersion, sourceID: sourceID, records: records
+        ), kind: "notes", sourceID: sourceID)
     }
 
     var byteCount: Int64 {
@@ -77,6 +87,8 @@ final class OLMItemCache: @unchecked Sendable {
                 guard contact.schemaVersion == Self.schemaVersion, contact.sourceID == sourceID else { return nil }
             } else if let calendar = envelope as? CalendarEnvelope {
                 guard calendar.schemaVersion == Self.schemaVersion, calendar.sourceID == sourceID else { return nil }
+            } else if let notes = envelope as? NoteEnvelope {
+                guard notes.schemaVersion == Self.schemaVersion, notes.sourceID == sourceID else { return nil }
             }
             return envelope
         }
@@ -121,6 +133,12 @@ private struct CalendarEnvelope: Codable {
     let schemaVersion: Int
     let sourceID: String
     let records: [CalendarEventRecord]
+}
+
+private struct NoteEnvelope: Codable {
+    let schemaVersion: Int
+    let sourceID: String
+    let records: [NoteRecord]
 }
 
 private extension NSLock {

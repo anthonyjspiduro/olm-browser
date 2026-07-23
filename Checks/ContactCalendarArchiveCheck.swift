@@ -13,6 +13,8 @@ enum ContactCalendarArchiveCheck {
 
         print("Contact collections: \(snapshot.contactSources.count)")
         print("Calendar collections: \(snapshot.calendarSources.count)")
+        print("Note collections: \(snapshot.noteSources.count)")
+        print("Task collections: \(snapshot.taskSources.count)")
 
         var contactCount = 0
         var contactsWithEmail = 0
@@ -32,6 +34,23 @@ enum ContactCalendarArchiveCheck {
         print("Contacts with phone: \(contactsWithPhone)")
         print("Distribution lists parsed: \(distributionLists)")
         print("Distribution-list members parsed: \(distributionListMembers)")
+
+        var noteCount = 0
+        var notesWithDates = 0
+        var notesWithText = 0
+        for source in snapshot.noteSources {
+            let page = try reader.loadNotes(
+                sourceID: source.id, matching: "", offset: 0, limit: Int.max
+            )
+            noteCount += page.totalCount
+            notesWithDates += page.records.count {
+                $0.createdAt != nil || $0.modifiedAt != nil
+            }
+            notesWithText += page.records.count { !$0.text.isEmpty }
+        }
+        print("Notes parsed: \(noteCount)")
+        print("Notes with recognized dates: \(notesWithDates)")
+        print("Notes with text: \(notesWithText)")
 
         guard includesCalendar else {
             print("Calendar parsing skipped (pass --calendar for the large validation)")
@@ -112,5 +131,7 @@ enum ContactCalendarArchiveCheck {
         let diagnostics = reader.operationalStatus().itemDiagnostics
         print("Diagnostic contacts counted: \(diagnostics.parsedContacts)")
         print("Diagnostic calendar events counted: \(diagnostics.parsedCalendarEvents)")
+        print("Diagnostic notes counted: \(diagnostics.parsedNotes)")
+        print("Diagnostic task collections counted: \(diagnostics.discoveredTaskCollections)")
     }
 }
